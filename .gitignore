@@ -1,0 +1,19 @@
+# Excel temp files (created when file is open)
+~$*.xlsx
+~$*.xls
+~$*.xlsm
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Environment variables
+.env
+
+# OS
+.DS_Store
+Thumbs.db
