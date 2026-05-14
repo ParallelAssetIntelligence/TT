@@ -2,12 +2,21 @@ import logging
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import Response
+from pydantic import BaseModel
 from app.services.excel_parser import parse_excel, write_enriched_excel
 from app.services.serpapi_enricher import enrich_leads
+from app.services.row_enricher import enrich_specific_row
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
+
+DEFAULT_LEADS_FILE = "Tustin Group Lead Gen list.xlsx"
+
+
+class EnrichRowRequest(BaseModel):
+    row: int
+    file: str | None = None
 
 
 @router.post("/upload")
@@ -51,3 +60,27 @@ async def upload_leads(file: UploadFile = File(...)):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={output_filename}"},
     )
+
+
+@router.post("/enrich-row")
+async def enrich_row(payload: EnrichRowRequest):
+    """
+    Enrich a single row in the on-disk leads Excel and save it back in place.
+
+    `row` is the Excel row number (row 1 is the header, row 2 is the first lead).
+    `file` is optional; defaults to "Tustin Group Lead Gen list.xlsx".
+    Adds Enriched_* columns (Website, LinkedIn, Title, Description, Location)
+    only for the requested row, leaving original columns untouched.
+    """
+    file_path = payload.file or DEFAULT_LEADS_FILE
+    try:
+        result = enrich_specific_row(file_path, payload.row)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Row enrichment failed")
+        raise HTTPException(status_code=500, detail=f"Enrichment failed: {e}")
+
+    return {"file": file_path, **result}
