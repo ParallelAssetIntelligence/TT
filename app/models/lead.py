@@ -8,8 +8,16 @@ class LeadRow(BaseModel):
     data: dict[str, str]        # column_name -> value (all strings)
 
     def search_text(self) -> str:
-        """Combine all non-empty values into a single search string."""
-        parts = [v for v in self.data.values() if v and v.strip()]
+        """Combine all non-empty values into a single search string.
+
+        Skips Enriched_* columns so previously-saved enrichment data is not
+        fed back into a new query (would happen on /upload of a file that
+        was already enriched).
+        """
+        parts = [
+            v for k, v in self.data.items()
+            if v and v.strip() and not k.startswith("Enriched_")
+        ]
         return " ".join(parts)
 
 
