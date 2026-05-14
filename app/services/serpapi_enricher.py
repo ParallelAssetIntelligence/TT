@@ -51,11 +51,16 @@ def enrich_leads(leads: list[LeadRow]) -> list[EnrichedData]:
 
 def _extract_smart_data(organic_results: list[dict]) -> EnrichedData:
     """
-    Parse SerpAPI results to extract website, linkedin, title, description, location.
-    Uses row_data to cross-reference and improve accuracy.
+    Parse SerpAPI results to extract:
+      - website, linkedin (personal), title, description, location
+      - linkedin_headline, linkedin_summary (from linkedin.com/in/ result)
+      - linkedin_company_description (from linkedin.com/company/ result)
     """
     website = ""
     linkedin = ""
+    linkedin_headline = ""
+    linkedin_summary = ""
+    linkedin_company_description = ""
     title = ""
     description = ""
     location = ""
@@ -65,19 +70,25 @@ def _extract_smart_data(organic_results: list[dict]) -> EnrichedData:
         snippet = result.get("snippet", "")
         result_title = result.get("title", "")
 
-        # Extract LinkedIn URL
+        # LinkedIn personal profile → URL, headline, summary
         if not linkedin and "linkedin.com/in/" in link:
             linkedin = link
+            linkedin_headline = _extract_linkedin_headline(result_title)
+            linkedin_summary = _clean_long_text(snippet, max_len=400)
             if not title:
                 title = _extract_title(result_title)
 
-        # Extract company website
+        # LinkedIn company page → company description
+        elif not linkedin_company_description and "linkedin.com/company/" in link:
+            linkedin_company_description = _clean_long_text(snippet, max_len=400)
+
+        # Company website
         if not website and _is_company_website(link):
             website = link
             if not description:
                 description = _clean_snippet(snippet)
 
-        # Extract location from snippets
+        # Location
         if not location:
             location = _extract_location(snippet)
 
@@ -88,6 +99,9 @@ def _extract_smart_data(organic_results: list[dict]) -> EnrichedData:
     return EnrichedData(
         website=website,
         linkedin=linkedin,
+        linkedin_headline=linkedin_headline,
+        linkedin_summary=linkedin_summary,
+        linkedin_company_description=linkedin_company_description,
         title=title,
         description=description,
         location=location,
@@ -106,6 +120,24 @@ def _extract_title(result_title: str) -> str:
     if match:
         return match.group(1).strip()
     return ""
+
+
+def _extract_linkedin_headline(result_title: str) -> str:
+    """Extract the headline portion from a LinkedIn result title.
+    e.g. 'John Smith - CEO at Acme Corp | LinkedIn' -> 'CEO at Acme Corp'
+    """
+    s = re.sub(r"\s*[\|\-]?\s*LinkedIn\s*$", "", result_title, flags=re.IGNORECASE).strip()
+    parts = s.split(" - ", 1)
+    if len(parts) == 2:
+        return parts[1].strip()
+    return s.strip()
+
+
+def _clean_long_text(snippet: str, max_len: int = 400) -> str:
+    """Clean a snippet but keep multiple sentences, truncated to max_len."""
+    snippet = re.sub(r"\b\w{3}\s+\d{1,2},\s+\d{4}\b", "", snippet)
+    snippet = snippet.replace("...", "").strip()
+    return snippet[:max_len].strip()
 
 
 def _is_company_website(url: str) -> bool:

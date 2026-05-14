@@ -1,22 +1,17 @@
 import logging
 from datetime import datetime
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from fastapi.responses import Response
-from pydantic import BaseModel
 from app.services.excel_parser import parse_excel, write_enriched_excel
 from app.services.serpapi_enricher import enrich_leads
-from app.services.row_enricher import enrich_specific_row
+from app.services.row_enricher import enrich_row_range, parse_row_range
+from app.services.leads_reader import read_row, read_all_rows
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
 
 DEFAULT_LEADS_FILE = "Tustin Group Lead Gen list.xlsx"
-
-
-class EnrichRowRequest(BaseModel):
-    row: int
-    file: str | None = None
 
 
 @router.post("/upload")
@@ -63,18 +58,23 @@ async def upload_leads(file: UploadFile = File(...)):
 
 
 @router.post("/enrich-row")
-async def enrich_row(payload: EnrichRowRequest):
+async def enrich_row(
+    rows: str = Query(
+        ...,
+        description="Excel row(s) to enrich. Single row: '2'. Range: '2-10'. Row 1 is the header.",
+        examples=["2", "2-10"],
+    ),
+):
     """
-    Enrich a single row in the on-disk leads Excel and save it back in place.
+    Enrich one row or a range of rows in Tustin Group Lead Gen list.xlsx
+    and save back to the same file.
 
-    `row` is the Excel row number (row 1 is the header, row 2 is the first lead).
-    `file` is optional; defaults to "Tustin Group Lead Gen list.xlsx".
     Adds Enriched_* columns (Website, LinkedIn, Title, Description, Location)
-    only for the requested row, leaving original columns untouched.
+    only for the requested rows, leaving original columns untouched.
     """
-    file_path = payload.file or DEFAULT_LEADS_FILE
     try:
-        result = enrich_specific_row(file_path, payload.row)
+        start, end = parse_row_range(rows)
+        result = enrich_row_range(DEFAULT_LEADS_FILE, start, end)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
@@ -83,4 +83,35 @@ async def enrich_row(payload: EnrichRowRequest):
         logger.exception("Row enrichment failed")
         raise HTTPException(status_code=500, detail=f"Enrichment failed: {e}")
 
-    return {"file": file_path, **result}
+    return {"file": DEFAULT_LEADS_FILE, "rows": rows, **result}
+
+
+@router.get("/rows")
+async def get_all_rows(
+    limit: int | None = Query(
+        None,
+        ge=1,
+        description="Max number of rows to return. Omit to return everything.",
+    ),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="Number of data rows to skip from the start (0-indexed).",
+    ),
+):
+    """Return all leads from Tustin Group Lead Gen list.xlsx as JSON."""
+    try:
+        return {"file": DEFAULT_LEADS_FILE, **read_all_rows(DEFAULT_LEADS_FILE, limit, offset)}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/rows/{row}")
+async def get_row(row: int):
+    """Return a single lead by Excel row number (row 1 = header, row 2 = first lead)."""
+    try:
+        return {"file": DEFAULT_LEADS_FILE, **read_row(DEFAULT_LEADS_FILE, row)}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
