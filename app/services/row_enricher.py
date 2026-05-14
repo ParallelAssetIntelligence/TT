@@ -125,9 +125,15 @@ def enrich_row_range(file_path: str, start: int, end: int) -> dict:
             col_idx = headers.index(col_name) + 1
             ws.cell(row=row_number, column=col_idx, value=val or "")
 
+        present = {k: v for k, v in row_data.items() if v}
+        missing = [k for k, v in row_data.items() if not v]
+
         results.append({
             "row": row_number,
             "search_query": lead.search_text(),
+            "present": present,
+            "missing": missing,
+            "original": row_data,
             "enriched": values,
         })
 
