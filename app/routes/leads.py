@@ -79,6 +79,14 @@ async def enrich_row(
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except PermissionError:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"'{DEFAULT_LEADS_FILE}' is open in another program (likely Excel). "
+                "Close the file and try again."
+            ),
+        )
     except Exception as e:
         logger.exception("Row enrichment failed")
         raise HTTPException(status_code=500, detail=f"Enrichment failed: {e}")

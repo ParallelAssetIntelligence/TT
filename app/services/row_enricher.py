@@ -49,6 +49,21 @@ def enrich_row_range(file_path: str, start: int, end: int) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Excel file not found: {file_path}")
 
+    # Fail fast if the file is locked (e.g. open in Excel) so we don't waste SerpAPI calls.
+    # Excel creates a hidden lock file named '~$<filename>' next to the open file.
+    lock_file = path.parent / f"~${path.name}"
+    if lock_file.exists():
+        raise PermissionError(
+            f"'{path.name}' is open in another program (likely Excel). Close it and try again."
+        )
+    try:
+        with open(path, "r+b"):
+            pass
+    except PermissionError:
+        raise PermissionError(
+            f"'{path.name}' is locked by another process. Close it and try again."
+        )
+
     wb = load_workbook(filename=str(path))
     ws = wb.active
 
