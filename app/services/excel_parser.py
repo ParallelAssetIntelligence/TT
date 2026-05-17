@@ -49,8 +49,26 @@ def write_enriched_excel(leads: list[LeadRow], enrichments: list[EnrichedData]) 
     ws = wb.active
     ws.title = "Enriched Leads"
 
-    # Smart columns to append
-    smart_columns = ["Website", "LinkedIn", "Title", "Description", "Location"]
+    # Smart columns to append (kept in sync with row_enricher.ENRICHED_COLUMNS,
+    # minus the "Enriched_" prefix to keep the /upload output friendly).
+    smart_columns = [
+        "Website",
+        "LinkedIn",
+        "LinkedIn_Headline",
+        "LinkedIn_Summary",
+        "LinkedIn_Company_Description",
+        "Title",
+        "Description",
+        "Location",
+        "Tenure_Months",
+        "Tenure_Label",
+        "Prior_Company_1",
+        "Prior_Company_2",
+        "Title_Qualifier",
+        "Signal_Tag",
+        "Script_Used",
+        "Personalized_Opener",
+    ]
 
     # Headers = original headers + smart columns
     original_headers = leads[0].headers
@@ -61,13 +79,24 @@ def write_enriched_excel(leads: list[LeadRow], enrichments: list[EnrichedData]) 
     for lead, enriched in zip(leads, enrichments):
         # Original data in original order
         original_values = [lead.data.get(h, "") for h in original_headers]
-        # Smart data appended
+        # Smart data appended (order MUST match smart_columns)
         smart_values = [
             enriched.website,
             enriched.linkedin,
+            enriched.linkedin_headline,
+            enriched.linkedin_summary,
+            enriched.linkedin_company_description,
             enriched.title,
             enriched.description,
             enriched.location,
+            enriched.tenure_months,
+            enriched.tenure_label,
+            enriched.prior_company_1,
+            enriched.prior_company_2,
+            enriched.title_qualifier,
+            enriched.signal_tag,
+            enriched.script_used,
+            enriched.personalized_opener,
         ]
         ws.append(original_values + smart_values)
 

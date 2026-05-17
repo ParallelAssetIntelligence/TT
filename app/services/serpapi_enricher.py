@@ -4,38 +4,54 @@ import time
 import logging
 from serpapi import GoogleSearch
 from app.models.lead import LeadRow, EnrichedData
+from app.services.intelligence import analyze_and_write_opener
 
 logger = logging.getLogger(__name__)
 
 SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
 
 
-def enrich_lead(lead: LeadRow) -> EnrichedData:
+def enrich_lead(lead: LeadRow, run_intelligence: bool = True) -> EnrichedData:
     """
     Query SerpAPI using ALL data from the row for maximum accuracy.
     e.g. if row has Company, Name, City, Industry — all get used in the search.
+
+    When `run_intelligence` is True (default), also runs the LLM intelligence
+    layer to fill tenure / prior companies / title qualifier / signal tag
+    and write a personalized opener using Tustin's 6 scripts.
     """
     query = lead.search_text()
     logger.info(f"SerpAPI query: {query}")
 
     if not SERPAPI_KEY:
         logger.warning("SERPAPI_KEY not set — returning empty enrichment")
-        return EnrichedData()
+        enriched = EnrichedData()
+    else:
+        try:
+            search = GoogleSearch({
+                "q": query,
+                "api_key": SERPAPI_KEY,
+                "num": 10,
+            })
+            results = search.get_dict()
+            organic = results.get("organic_results", [])
+            enriched = _extract_smart_data(organic)
+        except Exception as e:
+            logger.error(f"SerpAPI error for '{query}': {e}")
+            enriched = EnrichedData()
 
-    try:
-        search = GoogleSearch({
-            "q": query,
-            "api_key": SERPAPI_KEY,
-            "num": 10,
-        })
-        results = search.get_dict()
-        organic = results.get("organic_results", [])
+    if run_intelligence:
+        intel = analyze_and_write_opener(lead, enriched)
+        enriched.tenure_months = intel["tenure_months"]
+        enriched.tenure_label = intel["tenure_label"]
+        enriched.prior_company_1 = intel["prior_company_1"]
+        enriched.prior_company_2 = intel["prior_company_2"]
+        enriched.title_qualifier = intel["title_qualifier"]
+        enriched.signal_tag = intel["signal_tag"]
+        enriched.script_used = intel["script_used"]
+        enriched.personalized_opener = intel["personalized_opener"]
 
-        return _extract_smart_data(organic)
-
-    except Exception as e:
-        logger.error(f"SerpAPI error for '{query}': {e}")
-        return EnrichedData()
+    return enriched
 
 
 def enrich_leads(leads: list[LeadRow]) -> list[EnrichedData]:

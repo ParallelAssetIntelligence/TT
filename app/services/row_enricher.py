@@ -16,6 +16,14 @@ ENRICHED_COLUMNS = [
     "Enriched_Title",
     "Enriched_Description",
     "Enriched_Location",
+    "Enriched_Tenure_Months",
+    "Enriched_Tenure_Label",
+    "Enriched_Prior_Company_1",
+    "Enriched_Prior_Company_2",
+    "Enriched_Title_Qualifier",
+    "Enriched_Signal_Tag",
+    "Enriched_Script_Used",
+    "Enriched_Personalized_Opener",
 ]
 
 
@@ -120,6 +128,14 @@ def enrich_row_range(file_path: str, start: int, end: int) -> dict:
             "Enriched_Title": enriched.title,
             "Enriched_Description": enriched.description,
             "Enriched_Location": enriched.location,
+            "Enriched_Tenure_Months": enriched.tenure_months,
+            "Enriched_Tenure_Label": enriched.tenure_label,
+            "Enriched_Prior_Company_1": enriched.prior_company_1,
+            "Enriched_Prior_Company_2": enriched.prior_company_2,
+            "Enriched_Title_Qualifier": enriched.title_qualifier,
+            "Enriched_Signal_Tag": enriched.signal_tag,
+            "Enriched_Script_Used": enriched.script_used,
+            "Enriched_Personalized_Opener": enriched.personalized_opener,
         }
         for col_name, val in values.items():
             col_idx = headers.index(col_name) + 1

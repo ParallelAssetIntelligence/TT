@@ -1,0 +1,400 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Tustin CoPilot API",
+    "description": "Sales-assistant endpoints for Matt at The Tustin Group. Provides pre-call briefs and live-call suggestions backed by SerpAPI-enriched LinkedIn data and Tustin's 6 cold-call scripts.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Tustin CoPilot",
+      "email": "harsh@dyotaai.com"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://tt-production-da10.up.railway.app",
+      "description": "Production (Railway)"
+    }
+  ],
+  "paths": {
+    "/copilot/brief": {
+      "post": {
+        "summary": "Get pre-call brief for a lead",
+        "description": "Returns a structured pre-call brief for a specific lead. Use this when Matt asks 'brief me on X', 'tell me about X', 'who is X', or wants context before dialing. Brief includes signal tag, recommended opener (from Tustin's 6 scripts), likely objections with responses, and suggested follow-up questions.",
+        "operationId": "GetPreCallBrief",
+        "tags": ["CoPilot"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BriefRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Brief generated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BriefResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Lead not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/copilot/respond": {
+      "post": {
+        "summary": "Get live-call response suggestion",
+        "description": "Returns a 1-2 sentence response suggestion for Matt to use during a live call. Use this when Matt types what the prospect just said (e.g. 'says he has Johnson Controls', 'not interested', 'asking about price', 'already have a vendor'). Suggestion matches Matt's voice — warm, direct, never pushy — and is grounded in Tustin's objection handlers.",
+        "operationId": "GetLiveSuggestion",
+        "tags": ["CoPilot"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RespondRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Suggestion generated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RespondResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Lead not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/copilot/lookup": {
+      "post": {
+        "summary": "Look up a lead by name",
+        "description": "Returns a lead's enriched data (LinkedIn, tenure, signal tag, etc.) by searching the lead list for a name match. Use this when Matt mentions a person but you need their full record before generating a brief or suggestion.",
+        "operationId": "LookupLeadByName",
+        "tags": ["CoPilot"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LookupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Lead found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Lead not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BriefRequest": {
+        "type": "object",
+        "required": ["lead_name"],
+        "properties": {
+          "lead_name": {
+            "type": "string",
+            "description": "Full name of the lead to brief Matt on (first + last name).",
+            "example": "Leigh Guarino"
+          }
+        }
+      },
+      "BriefResponse": {
+        "type": "object",
+        "required": ["name", "company", "signal_tag", "recommended_opener"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Lead's full name",
+            "example": "Leigh Guarino"
+          },
+          "company": {
+            "type": "string",
+            "description": "Lead's company",
+            "example": "Westtown School"
+          },
+          "title": {
+            "type": "string",
+            "description": "Lead's job title",
+            "example": "Physical Plant Manager"
+          },
+          "title_qualifier": {
+            "type": "string",
+            "description": "Decision-making power: DECISION_MAKER, INFLUENCER, IN_HOUSE, UNKNOWN",
+            "example": "IN_HOUSE"
+          },
+          "signal_tag": {
+            "type": "string",
+            "description": "Why-this-call signal: NEW_HIRE, LONG_TENURED, CAREER_MOVER, OLDER_BUILDING, NEW_OCCUPANT, OWNERSHIP_CHANGE, PERMIT, ENERGY, REACTIVE, UNKNOWN",
+            "example": "UNKNOWN"
+          },
+          "tenure_months": {
+            "type": "integer",
+            "description": "Months at current company",
+            "example": 36,
+            "nullable": true
+          },
+          "prior_companies": {
+            "type": "array",
+            "description": "Previous employers",
+            "items": {
+              "type": "string"
+            },
+            "example": ["Penn Medicine", "Temple Health"]
+          },
+          "recommendation": {
+            "type": "string",
+            "description": "One-line strategy note for Matt (e.g. 'Don't pitch directly — IN_HOUSE role')",
+            "example": "Don't pitch directly. Leigh is facilities maintenance, not a decision-maker. Ask who handles vendor decisions."
+          },
+          "recommended_opener": {
+            "type": "string",
+            "description": "Personalized 2-3 sentence cold-call opener in Matt's voice",
+            "example": "Hi Leigh, this is Matt from The Tustin Group. We work with schools across the Philadelphia area on HVAC and building systems. Quick question — who handles vendor decisions for those at Westtown?"
+          },
+          "script_used": {
+            "type": "string",
+            "description": "Which Tustin script the opener is based on",
+            "example": "Script 6: Reactive"
+          },
+          "likely_objections": {
+            "type": "array",
+            "description": "Top 2 objections Matt should expect, with suggested responses",
+            "items": {
+              "type": "object",
+              "properties": {
+                "says": {
+                  "type": "string",
+                  "description": "What the prospect might say",
+                  "example": "Not the right person"
+                },
+                "respond": {
+                  "type": "string",
+                  "description": "Matt's suggested comeback",
+                  "example": "No problem — who manages building systems decisions? Facilities, property management, or ownership?"
+                }
+              }
+            }
+          },
+          "follow_up_questions": {
+            "type": "array",
+            "description": "Discovery questions Matt can use to advance the call",
+            "items": {
+              "type": "string"
+            },
+            "example": [
+              "What's your current process for HVAC service?",
+              "When was your last full systems audit?"
+            ]
+          }
+        }
+      },
+      "RespondRequest": {
+        "type": "object",
+        "required": ["prospect_said"],
+        "properties": {
+          "lead_name": {
+            "type": "string",
+            "description": "Name of the lead Matt is currently calling (optional — improves context if provided)",
+            "example": "Leigh Guarino"
+          },
+          "prospect_said": {
+            "type": "string",
+            "description": "What the prospect just said, or the objection Matt is facing",
+            "example": "says he has Johnson Controls 10 years"
+          }
+        }
+      },
+      "RespondResponse": {
+        "type": "object",
+        "required": ["suggestion"],
+        "properties": {
+          "suggestion": {
+            "type": "string",
+            "description": "1-2 sentence response suggestion in Matt's voice (max ~30 words)",
+            "example": "What's your process for making sure they're still delivering value? Have they done a full systems audit in the last 2 years?"
+          },
+          "intent_detected": {
+            "type": "string",
+            "description": "Classified intent of what the prospect said: VENDOR_LOCKED, NOT_INTERESTED, PRICE_QUESTION, GATEKEEPER, INTERESTED, OTHER",
+            "example": "VENDOR_LOCKED"
+          }
+        }
+      },
+      "LookupRequest": {
+        "type": "object",
+        "required": ["lead_name"],
+        "properties": {
+          "lead_name": {
+            "type": "string",
+            "description": "Full or partial name of the lead to look up",
+            "example": "Leigh Guarino"
+          }
+        }
+      },
+      "LeadRecord": {
+        "type": "object",
+        "properties": {
+          "row": {
+            "type": "integer",
+            "description": "Excel row number where this lead lives",
+            "example": 2
+          },
+          "name": {
+            "type": "string",
+            "description": "Lead's full name",
+            "example": "Leigh Guarino"
+          },
+          "company": {
+            "type": "string",
+            "description": "Company the lead works at",
+            "example": "Westtown School"
+          },
+          "title": {
+            "type": "string",
+            "description": "Lead's current job title",
+            "example": "Physical Plant Manager"
+          },
+          "phone": {
+            "type": "string",
+            "description": "Lead's phone number (may be mobile or office)",
+            "example": "610-399-7627"
+          },
+          "email": {
+            "type": "string",
+            "description": "Lead's email address",
+            "example": "leigh.guarino@westtown.edu"
+          },
+          "city": {
+            "type": "string",
+            "description": "City where the lead is located",
+            "example": "West Chester"
+          },
+          "state": {
+            "type": "string",
+            "description": "US state two-letter code (e.g. PA, NY)",
+            "example": "PA"
+          },
+          "linkedin_url": {
+            "type": "string",
+            "description": "Lead's LinkedIn profile URL",
+            "example": "https://linkedin.com/in/leighguarino"
+          },
+          "linkedin_headline": {
+            "type": "string",
+            "description": "LinkedIn profile headline (job title and company)",
+            "example": "Physical Plant Manager at Westtown School"
+          },
+          "linkedin_summary": {
+            "type": "string",
+            "description": "Snippet from LinkedIn profile bio/about section",
+            "example": "Facilities professional with 12 years experience..."
+          },
+          "tenure_months": {
+            "type": "integer",
+            "description": "Months the lead has been at their current company",
+            "nullable": true,
+            "example": 36
+          },
+          "tenure_label": {
+            "type": "string",
+            "description": "Tenure category: NEW_HIRE (<12mo), MID_TENURE (12-59mo), LONG_TENURED (60+mo)",
+            "example": "MID_TENURE"
+          },
+          "prior_company_1": {
+            "type": "string",
+            "description": "Lead's most recent previous employer",
+            "example": "Penn Medicine"
+          },
+          "prior_company_2": {
+            "type": "string",
+            "description": "Lead's second most recent previous employer",
+            "example": "Temple Health"
+          },
+          "title_qualifier": {
+            "type": "string",
+            "description": "Decision-making power: DECISION_MAKER, INFLUENCER, IN_HOUSE, UNKNOWN",
+            "example": "IN_HOUSE"
+          },
+          "signal_tag": {
+            "type": "string",
+            "description": "Why-this-call signal: NEW_HIRE, LONG_TENURED, CAREER_MOVER, OLDER_BUILDING, NEW_OCCUPANT, PERMIT, ENERGY, REACTIVE, UNKNOWN",
+            "example": "UNKNOWN"
+          },
+          "script_used": {
+            "type": "string",
+            "description": "Which of Tustin's 6 cold-call scripts was used to generate the opener",
+            "example": "Script 6: Reactive"
+          },
+          "personalized_opener": {
+            "type": "string",
+            "description": "AI-generated 2-3 sentence cold-call opener in Matt's voice",
+            "example": "Hi Leigh, this is Matt from The Tustin Group..."
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["detail"],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "Human-readable error message",
+            "example": "No lead found matching that name"
+          }
+        }
+      }
+    }
+  }
+}

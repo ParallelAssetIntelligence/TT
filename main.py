@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.databaseconnection import supabase_manager
 from app.routes.leads import router as leads_router
+from app.routes.copilot import router as copilot_router
 
 app = FastAPI(title="Tustin API")
 
@@ -15,6 +16,7 @@ app.add_middleware(
 
 
 app.include_router(leads_router)
+app.include_router(copilot_router)
 
 
 @app.get("/")
