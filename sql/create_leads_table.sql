@@ -53,6 +53,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS leads_dedupe_key_uidx
 -- If you turn on RLS later, add policies for the anon/authenticated roles.
 ALTER TABLE public.leads ENABLE ROW LEVEL SECURITY;
 
+-- CREATE POLICY doesn't support IF NOT EXISTS, so drop-then-create for
+-- idempotency when this file is re-applied.
+DROP POLICY IF EXISTS "Service role full access" ON public.leads;
 CREATE POLICY "Service role full access"
     ON public.leads
     FOR ALL
