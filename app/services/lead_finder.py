@@ -1,81 +1,88 @@
-"""Find leads in the Excel file by name (fuzzy match).
+"""Find leads in the Supabase `leads` table by name.
 
-Used by the Copilot bot endpoints when Matt asks about a lead by name —
-the lead is stored in Tustin Group Lead Gen list.xlsx, not in a DB.
+Schema (see sql/create_leads_table.sql):
+  - top-level columns: id, name, company, title, phone, email,
+                       signal_tag, title_qualifier, source_file, timestamps
+  - enrichment (jsonb): city, state, linkedin_*, tenure_*, prior_company_*,
+                        script_used, personalized_opener
+
+The public API (find_lead_by_name + row_to_lead_record) returns the same dict
+shape the Excel-backed version used, so copilot.py / copilot_service.py don't
+need to know the data source moved.
 """
 import logging
-from app.services.leads_reader import read_all_rows
+from app.databaseconnection import supabase_manager
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LEADS_FILE = "Tustin Group Lead Gen list.xlsx"
-
-# Column name candidates — handles ZoomInfo exports with slight variations.
-NAME_COLS = ["Name", "Full Name", "Contact Name"]
-FIRST_NAME_COLS = ["First Name", "FirstName", "Given Name"]
-LAST_NAME_COLS = ["Last Name", "LastName", "Surname", "Family Name"]
+LEADS_TABLE = "leads"
 
 
-def _build_full_name(row_data: dict) -> str:
-    """Construct the lead's full name from whatever name columns exist."""
-    for col in NAME_COLS:
-        if row_data.get(col):
-            return row_data[col].strip()
+def find_lead_by_name(name_query: str) -> dict | None:
+    """Return the first lead whose name matches (case-insensitive).
 
-    first = next((row_data[c] for c in FIRST_NAME_COLS if row_data.get(c)), "")
-    last = next((row_data[c] for c in LAST_NAME_COLS if row_data.get(c)), "")
-    return f"{first} {last}".strip()
-
-
-def find_lead_by_name(name_query: str, file_path: str = DEFAULT_LEADS_FILE) -> dict | None:
-    """Return the first lead whose full name contains the query (case-insensitive).
-
-    Returns the matching row dict (row number + data) or None if no match.
+    Tries exact lower(name) match first; falls back to a substring ILIKE search.
+    Returns the raw row dict (Supabase row) or None.
     """
     if not name_query or not name_query.strip():
         return None
 
-    query = name_query.lower().strip()
-    all_rows = read_all_rows(file_path)
+    client = supabase_manager.get_client()
+    if not client:
+        logger.error("Supabase client unavailable — cannot look up leads")
+        return None
 
-    # Exact full-name match first.
-    for row in all_rows["rows"]:
-        full_name = _build_full_name(row["data"]).lower()
-        if full_name == query:
-            return row
+    query = name_query.strip()
 
-    # Fall back to substring match.
-    for row in all_rows["rows"]:
-        full_name = _build_full_name(row["data"]).lower()
-        if query in full_name or all(part in full_name for part in query.split()):
-            return row
+    # Exact match first (cheap, indexed via leads_name_lower_idx).
+    exact = (
+        client.table(LEADS_TABLE)
+        .select("*")
+        .ilike("name", query)
+        .limit(1)
+        .execute()
+    )
+    if exact.data:
+        return exact.data[0]
 
-    return None
+    # Substring fallback: matches "John" against "John Smith".
+    like = (
+        client.table(LEADS_TABLE)
+        .select("*")
+        .ilike("name", f"%{query}%")
+        .limit(1)
+        .execute()
+    )
+    return like.data[0] if like.data else None
 
 
 def row_to_lead_record(row: dict) -> dict:
-    """Normalize an Excel row into the LeadRecord schema the Copilot API returns."""
-    data = row["data"]
+    """Normalize a Supabase row into the LeadRecord shape the Copilot API returns.
+
+    Pulls top-level columns straight through; flattens the `enrichment` jsonb
+    into the same flat keys the brief/respond prompts expect.
+    """
+    enrichment = row.get("enrichment") or {}
     return {
-        "row": row["row"],
-        "name": _build_full_name(data),
-        "company": data.get("Company", ""),
-        "title": data.get("Title", ""),
-        "phone": data.get("Phone", ""),
-        "email": data.get("Email", ""),
-        "city": data.get("City", ""),
-        "state": data.get("State", ""),
-        "linkedin_url": data.get("Enriched_LinkedIn", ""),
-        "linkedin_headline": data.get("Enriched_LinkedIn_Headline", ""),
-        "linkedin_summary": data.get("Enriched_LinkedIn_Summary", ""),
-        "tenure_months": _as_int_or_none(data.get("Enriched_Tenure_Months")),
-        "tenure_label": data.get("Enriched_Tenure_Label", ""),
-        "prior_company_1": data.get("Enriched_Prior_Company_1", ""),
-        "prior_company_2": data.get("Enriched_Prior_Company_2", ""),
-        "title_qualifier": data.get("Enriched_Title_Qualifier", ""),
-        "signal_tag": data.get("Enriched_Signal_Tag", ""),
-        "script_used": data.get("Enriched_Script_Used", ""),
-        "personalized_opener": data.get("Enriched_Personalized_Opener", ""),
+        "row": row.get("id"),
+        "name": row.get("name", "") or "",
+        "company": row.get("company", "") or "",
+        "title": row.get("title", "") or "",
+        "phone": row.get("phone", "") or "",
+        "email": row.get("email", "") or "",
+        "city": enrichment.get("city", "") or "",
+        "state": enrichment.get("state", "") or "",
+        "linkedin_url": enrichment.get("linkedin_url", "") or "",
+        "linkedin_headline": enrichment.get("linkedin_headline", "") or "",
+        "linkedin_summary": enrichment.get("linkedin_summary", "") or "",
+        "tenure_months": _as_int_or_none(enrichment.get("tenure_months")),
+        "tenure_label": enrichment.get("tenure_label", "") or "",
+        "prior_company_1": enrichment.get("prior_company_1", "") or "",
+        "prior_company_2": enrichment.get("prior_company_2", "") or "",
+        "title_qualifier": row.get("title_qualifier", "") or "",
+        "signal_tag": row.get("signal_tag", "") or "",
+        "script_used": enrichment.get("script_used", "") or "",
+        "personalized_opener": enrichment.get("personalized_opener", "") or "",
     }
 
 
