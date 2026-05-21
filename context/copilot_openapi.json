@@ -507,12 +507,12 @@
       },
       "UploadLeadsFileResponse": {
         "type": "object",
-        "required": ["status", "filename", "message"],
+        "required": ["status", "filename", "rows_detected", "columns_detected", "storage_url"],
         "properties": {
           "status": {
             "type": "string",
-            "description": "Always 'success' on a 200 response",
-            "example": "success",
+            "description": "Upload status — always '✅ success' on 200",
+            "example": "✅ success",
             "x-ms-summary": "Status"
           },
           "filename": {
@@ -521,17 +521,11 @@
             "example": "leads_week22.xlsx",
             "x-ms-summary": "Filename"
           },
-          "storage_path": {
-            "type": "string",
-            "description": "Object key inside the uploaded-leads bucket (timestamp_filename)",
-            "example": "20260521_104530_leads_week22.xlsx",
-            "x-ms-summary": "Storage path"
-          },
-          "storage_url": {
-            "type": "string",
-            "description": "Public URL to the staged file in Supabase Storage",
-            "example": "https://wzhqsmaunimgvowkdegl.supabase.co/storage/v1/object/public/uploaded-leads/20260521_104530_leads_week22.xlsx",
-            "x-ms-summary": "Storage URL"
+          "columns_detected": {
+            "type": "integer",
+            "description": "Number of columns in the header row",
+            "example": 12,
+            "x-ms-summary": "Columns detected"
           },
           "rows_detected": {
             "type": "integer",
@@ -539,18 +533,11 @@
             "example": 234,
             "x-ms-summary": "Rows detected"
           },
-          "columns_detected": {
-            "type": "integer",
-            "description": "Number of columns in the header row",
-            "example": 12,
-            "x-ms-summary": "Columns detected"
-          },
-          "message": {
+          "storage_url": {
             "type": "string",
-            "description": "Human-readable summary the agent should show the user verbatim",
-            "example": "File uploaded — 234 leads detected in leads_week22.xlsx. Enrichment is running automatically in the background. You can lookup any lead right now; full briefs will be ready in 1-2 minutes.",
-            "x-ms-summary": "Summary message",
-            "x-ms-visibility": "important"
+            "description": "Public URL to the staged file in Supabase Storage",
+            "example": "https://wzhqsmaunimgvowkdegl.supabase.co/storage/v1/object/public/uploaded-leads/20260521_104530_leads_week22.xlsx",
+            "x-ms-summary": "Storage URL"
           }
         }
       },
