@@ -96,6 +96,48 @@
         }
       }
     },
+    "/copilot/upload-file": {
+      "post": {
+        "summary": "Upload a leads file to staging",
+        "description": "Call this tool when the user uploads, attaches, or asks to enrich an .xlsx/.xls lead file. Pass the file's original name and its base64-encoded contents. The tool validates the file (extension, size, Excel readability, row count), stages it in the Supabase 'uploaded-leads' bucket, and returns a confirmation message the agent should show the user verbatim. Do NOT call this for questions about individual leads by name — use brief or lookup instead.",
+        "operationId": "UploadLeadsFile",
+        "tags": ["CoPilot"],
+        "x-ms-summary": "Upload leads file",
+        "x-ms-visibility": "important",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadLeadsFileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File staged successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadLeadsFileResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad file (wrong extension, too large, invalid base64, unreadable Excel, no rows)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/copilot/lookup": {
       "post": {
         "summary": "Look up a lead by name",
@@ -381,6 +423,73 @@
             "type": "string",
             "description": "AI-generated 2-3 sentence cold-call opener in Matt's voice",
             "example": "Hi Leigh, this is Matt from The Tustin Group..."
+          }
+        }
+      },
+      "UploadLeadsFileRequest": {
+        "type": "object",
+        "required": ["filename", "content_base64"],
+        "properties": {
+          "filename": {
+            "type": "string",
+            "description": "Original filename including the .xlsx or .xls extension. In a Copilot Studio Topic, bind to LeadsFile.Name.",
+            "example": "leads_week22.xlsx",
+            "x-ms-summary": "Filename"
+          },
+          "content_base64": {
+            "type": "string",
+            "description": "Base64-encoded contents of the .xlsx file. In a Copilot Studio Topic, bind to LeadsFile.Content.",
+            "example": "UEsDBBQABgAIAAAAIQ...",
+            "x-ms-summary": "File contents (base64)"
+          }
+        }
+      },
+      "UploadLeadsFileResponse": {
+        "type": "object",
+        "required": ["status", "filename", "message"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Always 'success' on a 200 response",
+            "example": "success",
+            "x-ms-summary": "Status"
+          },
+          "filename": {
+            "type": "string",
+            "description": "Original filename Matt uploaded",
+            "example": "leads_week22.xlsx",
+            "x-ms-summary": "Filename"
+          },
+          "storage_path": {
+            "type": "string",
+            "description": "Object key inside the uploaded-leads bucket (timestamp_filename)",
+            "example": "20260521_104530_leads_week22.xlsx",
+            "x-ms-summary": "Storage path"
+          },
+          "storage_url": {
+            "type": "string",
+            "description": "Public URL to the staged file in Supabase Storage",
+            "example": "https://wzhqsmaunimgvowkdegl.supabase.co/storage/v1/object/public/uploaded-leads/20260521_104530_leads_week22.xlsx",
+            "x-ms-summary": "Storage URL"
+          },
+          "rows_detected": {
+            "type": "integer",
+            "description": "Number of lead rows found in the file (excludes header)",
+            "example": 234,
+            "x-ms-summary": "Rows detected"
+          },
+          "columns_detected": {
+            "type": "integer",
+            "description": "Number of columns in the header row",
+            "example": 12,
+            "x-ms-summary": "Columns detected"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable summary the agent should show the user verbatim",
+            "example": "File uploaded successfully — 234 leads detected in leads_week22.xlsx. Reply 'enrich it' to start enrichment.",
+            "x-ms-summary": "Summary message",
+            "x-ms-visibility": "important"
           }
         }
       },
