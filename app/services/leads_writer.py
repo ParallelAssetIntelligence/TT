@@ -447,7 +447,7 @@ def _notify_batch_complete(lead_ids: list[int], succeeded: int, failed: int) -> 
     """Send one Teams card summarizing the batch. Best-effort: never raises."""
     try:
         from app.services.teams_notifier import (
-            build_public_url,
+            build_download_url,
             send_enrichment_complete,
         )
 
@@ -485,7 +485,7 @@ def _notify_batch_complete(lead_ids: list[int], succeeded: int, failed: int) -> 
             rows_failed=failed,
             new_hires=new_hires,
             long_tenured=long_tenured,
-            file_url=build_public_url(source_file),
+            file_url=build_download_url(source_file),
         )
     except Exception:
         # Notifications are advisory — never let a Teams hiccup break the pipeline.

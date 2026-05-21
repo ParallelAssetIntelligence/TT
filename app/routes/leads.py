@@ -6,6 +6,7 @@ from app.services.excel_parser import parse_excel, write_enriched_excel
 from app.services.serpapi_enricher import enrich_leads
 from app.services.row_enricher import enrich_row_range, parse_row_range
 from app.services.leads_reader import read_row, read_all_rows
+from app.services.leads_exporter import fetch_leads, leads_to_xlsx
 
 logger = logging.getLogger(__name__)
 
@@ -123,3 +124,51 @@ async def get_row(row: int):
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/download")
+async def download_enriched_leads(
+    source_file: str | None = Query(
+        None,
+        description=(
+            "Filter to leads originating from this uploaded file (e.g. "
+            "'20260521_220636_test_leads.xlsx'). Omit to download every lead."
+        ),
+    ),
+    limit: int = Query(5000, ge=1, le=20000),
+):
+    """Download enriched leads from the Supabase `leads` table as an xlsx.
+
+    Linked from the Teams notification card so Matt can grab a per-upload
+    spreadsheet with all enrichment columns filled in (LinkedIn, tenure,
+    opener, etc.) without re-uploading the original file.
+    """
+    try:
+        rows = fetch_leads(source_file=source_file, limit=limit)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No leads found for source_file={source_file!r}"
+                if source_file
+                else "No leads in the leads table"
+            ),
+        )
+
+    xlsx_bytes = leads_to_xlsx(rows)
+
+    # Friendly attachment name — derived from the source file if provided.
+    if source_file:
+        stem = source_file.rsplit(".", 1)[0]
+        out_name = f"{stem}_enriched.xlsx"
+    else:
+        out_name = f"leads_enriched_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
+    )

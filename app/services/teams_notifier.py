@@ -15,6 +15,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 TEAMS_WEBHOOK_URL = os.getenv("TEAMS_WEBHOOK_URL", "")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://tt-production-da10.up.railway.app").rstrip("/")
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
 
@@ -104,7 +105,7 @@ def _build_card(
         body.append(
             {
                 "type": "TextBlock",
-                "text": "📂 Updated file URL:",
+                "text": "📂 Download enriched leads:",
                 "wrap": True,
                 "spacing": "Medium",
                 "weight": "Bolder",
@@ -123,7 +124,7 @@ def _build_card(
     actions: list[dict] = []
     if file_url:
         actions.append(
-            {"type": "Action.OpenUrl", "title": "Open file", "url": file_url}
+            {"type": "Action.OpenUrl", "title": "Download enriched .xlsx", "url": file_url}
         )
 
     card_content: dict = {
@@ -147,12 +148,24 @@ def _build_card(
 
 
 def build_public_url(source_file: str, bucket: str = "uploaded-leads") -> str | None:
-    """Reconstruct the Supabase Storage public URL for an uploaded file.
+    """Reconstruct the Supabase Storage public URL for the raw uploaded file.
 
-    Called from the enrichment pipeline, which only has the source_file
-    filename on hand. Returns None if SUPABASE_URL isn't set.
+    Returns None if SUPABASE_URL isn't set.
     """
     supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
     if not supabase_url or not source_file:
         return None
     return f"{supabase_url}/storage/v1/object/public/{bucket}/{source_file}"
+
+
+def build_download_url(source_file: str) -> str | None:
+    """URL to the /leads/download endpoint filtered by source_file.
+
+    This is what we link from the Teams card so Matt downloads a freshly
+    generated xlsx containing the *enriched* rows for his upload — not the
+    raw file he originally uploaded.
+    """
+    if not source_file or not API_BASE_URL:
+        return None
+    from urllib.parse import quote
+    return f"{API_BASE_URL}/leads/download?source_file={quote(source_file)}"
