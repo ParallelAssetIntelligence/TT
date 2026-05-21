@@ -18,6 +18,8 @@ import logging
 import os
 from typing import Any
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,6 +27,7 @@ from app.databaseconnection import supabase_manager
 from app.services.excel_parser import parse_excel
 from app.services.leads_writer import (
     enrich_leads_in_background,
+    fetch_failed_lead_ids,
     insert_leads_skip_duplicates,
 )
 from app.services.storage_uploader import UPLOADED_BUCKET
@@ -130,4 +133,117 @@ async def storage_uploaded(
         "file": object_path,
         "enrichment_queued": len(inserted_ids),
         **result,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Operational endpoints (manually or cron-triggered).
+# ---------------------------------------------------------------------------
+
+
+class RetryFailedRequest(BaseModel):
+    limit: int = Field(default=100, ge=1, le=1000)
+    max_attempts: int = Field(default=5, ge=1, le=20)
+
+
+@router.post("/retry-failed-enrichments", status_code=status.HTTP_200_OK)
+async def retry_failed_enrichments(
+    payload: RetryFailedRequest,
+    background_tasks: BackgroundTasks,
+    x_webhook_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Re-run enrichment for leads where enrichment_status='failed'.
+
+    Skips rows that already hit max_attempts so a permanently bad row doesn't
+    burn API credits forever. Returns the number of leads queued so callers
+    can paginate by re-invoking until queued=0.
+    """
+    expected_secret = os.getenv("WEBHOOK_SECRET")
+    if not expected_secret:
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
+    if x_webhook_secret != expected_secret:
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
+
+    try:
+        lead_ids = fetch_failed_lead_ids(
+            limit=payload.limit, max_attempts=payload.max_attempts,
+        )
+    except Exception as e:
+        logger.exception("retry: failed to fetch failed lead ids")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if lead_ids:
+        background_tasks.add_task(enrich_leads_in_background, lead_ids)
+    return {"status": "ok", "queued": len(lead_ids), "lead_ids": lead_ids[:25]}
+
+
+class CleanupBucketRequest(BaseModel):
+    days: int = Field(default=30, ge=1, le=3650)
+    dry_run: bool = Field(default=False)
+
+
+@router.post("/cleanup-bucket", status_code=status.HTTP_200_OK)
+async def cleanup_bucket(
+    payload: CleanupBucketRequest,
+    x_webhook_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Delete files older than `days` from the uploaded-leads bucket.
+
+    Intended to be called on a schedule (Supabase pg_cron, Railway cron, or
+    any external scheduler). Pass dry_run=true to preview what would be
+    deleted without actually removing anything.
+    """
+    expected_secret = os.getenv("WEBHOOK_SECRET")
+    if not expected_secret:
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
+    if x_webhook_secret != expected_secret:
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
+
+    client = supabase_manager.get_client()
+    if not client:
+        raise HTTPException(status_code=500, detail="Supabase client unavailable")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=payload.days)
+    try:
+        files = client.storage.from_(UPLOADED_BUCKET).list()
+    except Exception as e:
+        logger.exception("cleanup-bucket: list failed")
+        raise HTTPException(status_code=500, detail=f"Could not list bucket: {e}")
+
+    stale_paths: list[str] = []
+    for f in files or []:
+        # Storage list entries have shape: {name, id, created_at, ...}
+        name = f.get("name") if isinstance(f, dict) else None
+        created_at_raw = f.get("created_at") if isinstance(f, dict) else None
+        if not name or not created_at_raw:
+            continue
+        try:
+            # Supabase returns ISO 8601, sometimes with a 'Z' suffix.
+            created_at = datetime.fromisoformat(created_at_raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if created_at < cutoff:
+            stale_paths.append(name)
+
+    if payload.dry_run or not stale_paths:
+        return {
+            "status": "ok",
+            "would_delete": len(stale_paths),
+            "deleted": 0,
+            "cutoff": cutoff.isoformat(),
+            "sample": stale_paths[:10],
+        }
+
+    try:
+        # supabase-py's storage.remove accepts a list of paths.
+        client.storage.from_(UPLOADED_BUCKET).remove(stale_paths)
+    except Exception as e:
+        logger.exception("cleanup-bucket: remove failed")
+        raise HTTPException(status_code=500, detail=f"Could not delete files: {e}")
+
+    return {
+        "status": "ok",
+        "deleted": len(stale_paths),
+        "cutoff": cutoff.isoformat(),
+        "sample": stale_paths[:10],
     }

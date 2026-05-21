@@ -1,14 +1,20 @@
 """Insert parsed Excel rows into the Supabase `leads` table + run SerpAPI enrichment.
 
 Used by /webhooks/storage-uploaded when a new xlsx lands in the uploaded-leads
-bucket. Maps the loose Excel column conventions (Name vs First+Last, Company vs
-Account, etc.) onto the leads schema, then skips any rows whose (name, company)
-pair already exists. After insert, the webhook schedules
-enrich_leads_in_background() so SerpAPI + the LLM intelligence layer fill in
-LinkedIn, tenure, opener, etc. without blocking the webhook response.
+bucket. Maps loose Excel column conventions (Name vs First+Last, Company vs
+Account) onto the leads schema, then upserts with a canonical dedupe_key so
+duplicates are caught at the DB layer (insensitive to whitespace, casing,
+and common company suffixes like Inc / LLC / Corp).
+
+After insert, the webhook schedules enrich_leads_in_background() which runs
+SerpAPI + the LLM intelligence layer concurrently across multiple threads,
+recording per-row status (`pending` / `done` / `failed`) so the retry endpoint
+can re-attempt failed rows.
 """
 import logging
-import time
+import os
+import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,7 +24,10 @@ from app.models.lead import LeadRow
 logger = logging.getLogger(__name__)
 
 LEADS_TABLE = "leads"
-ENRICH_DELAY_SECONDS = 1.0  # rate-limit gap between SerpAPI calls
+
+# Parallel SerpAPI + LLM calls. 5 is a safe default — SerpAPI's free tier
+# allows ~100 req/min, and each enrichment costs 1 SerpAPI + 1 OpenRouter call.
+ENRICH_CONCURRENCY = int(os.getenv("ENRICH_CONCURRENCY", "5"))
 
 # Column-name candidates — handles the most common ZoomInfo / Apollo / generic
 # export naming variations. Lowercased before matching.
@@ -51,6 +60,46 @@ TOP_LEVEL_ENRICHED = {
     "enriched_signal_tag": "signal_tag",
 }
 
+# Common legal-entity suffixes we strip when normalizing company names so
+# "ABC Hospital" and "ABC Hospital, Inc." dedupe to the same key.
+_COMPANY_SUFFIX_RE = re.compile(
+    r"[,.\s]+(inc|llc|ltd|corp|corporation|company|co|gmbh|sa|plc|pty|holdings)\.?\s*$",
+    re.IGNORECASE,
+)
+
+
+# ---------------------------------------------------------------------------
+# Normalization helpers (mirrored by the SQL backfill in leads_table_v2_migration.sql)
+# ---------------------------------------------------------------------------
+
+
+def _normalize_phone(phone: str) -> str:
+    """Return the last 10 digits of a phone number, or '' if too few digits."""
+    digits = re.sub(r"\D", "", phone or "")
+    return digits[-10:] if len(digits) >= 10 else ""
+
+
+def _normalize_company(company: str) -> str:
+    """Lowercase, strip Inc/LLC/Corp suffixes, collapse whitespace."""
+    c = (company or "").strip().lower()
+    # Strip suffixes repeatedly in case of stacked ones ("Acme Corp Inc")
+    while True:
+        new = _COMPANY_SUFFIX_RE.sub("", c).strip()
+        if new == c:
+            break
+        c = new
+    return re.sub(r"\s+", " ", c)
+
+
+def _compute_dedupe_key(payload: dict[str, Any]) -> str:
+    """Canonical identity key. Phone is preferred when present."""
+    phone = _normalize_phone(payload.get("phone", "") or "")
+    if phone:
+        return f"phone:{phone}"
+    name = (payload.get("name") or "").strip().lower()
+    company = _normalize_company(payload.get("company") or "")
+    return f"nc:{name}|{company}"
+
 
 def _lookup(data_lower: dict[str, str], candidates: list[str]) -> str:
     """Return the first non-empty value among the candidate column names."""
@@ -66,7 +115,6 @@ def xlsx_row_to_lead_insert(row: LeadRow, source_file: str) -> dict[str, Any] | 
 
     Returns None if the row has no usable name (the one truly required field).
     """
-    # Case-insensitive lookups — uploaded files have inconsistent casing.
     data_lower = {k.strip().lower(): (v or "") for k, v in row.data.items()}
 
     name = _lookup(data_lower, NAME_COLS)
@@ -93,8 +141,6 @@ def xlsx_row_to_lead_insert(row: LeadRow, source_file: str) -> dict[str, Any] | 
     title_qualifier = ""
     signal_tag = ""
 
-    # Map Enriched_* columns. Anything else we don't recognize goes into
-    # enrichment["extras"] so no information is lost.
     extras: dict[str, str] = {}
     consumed = (
         set(NAME_COLS) | set(FIRST_NAME_COLS) | set(LAST_NAME_COLS)
@@ -102,9 +148,7 @@ def xlsx_row_to_lead_insert(row: LeadRow, source_file: str) -> dict[str, Any] | 
         | set(EMAIL_COLS) | set(CITY_COLS) | set(STATE_COLS)
     )
     for k, v in data_lower.items():
-        if not v:
-            continue
-        if k in consumed:
+        if not v or k in consumed:
             continue
         if k in ENRICHMENT_COL_MAP:
             target = ENRICHMENT_COL_MAP[k]
@@ -126,7 +170,13 @@ def xlsx_row_to_lead_insert(row: LeadRow, source_file: str) -> dict[str, Any] | 
     if extras:
         enrichment["extras"] = extras
 
-    return {
+    # If the upload already brought enrichment fields, treat it as 'done' so
+    # the background SerpAPI sweep doesn't waste calls re-enriching it.
+    has_existing_enrichment = bool(
+        enrichment.get("personalized_opener") or enrichment.get("linkedin_url")
+    )
+
+    payload: dict[str, Any] = {
         "name": name,
         "company": company or None,
         "title": title or None,
@@ -136,21 +186,27 @@ def xlsx_row_to_lead_insert(row: LeadRow, source_file: str) -> dict[str, Any] | 
         "title_qualifier": title_qualifier or None,
         "enrichment": enrichment,
         "source_file": source_file,
+        "enrichment_status": "done" if has_existing_enrichment else "pending",
     }
+    if has_existing_enrichment:
+        payload["enriched_at"] = _now_iso()
+
+    payload["dedupe_key"] = _compute_dedupe_key(payload)
+    return payload
 
 
 def insert_leads_skip_duplicates(
     parsed_rows: list[LeadRow], source_file: str
 ) -> dict[str, Any]:
-    """Insert leads in bulk, skipping any whose (name, company) already exists.
+    """Insert leads, letting the DB's unique(dedupe_key) index reject duplicates.
 
-    Returns {inserted, skipped, invalid, total} — invalid = rows with no name.
+    Returns {inserted, skipped, invalid, total, inserted_ids}.
     """
     client = supabase_manager.get_client()
     if not client:
         raise RuntimeError("Supabase client unavailable")
 
-    payloads = []
+    payloads: list[dict[str, Any]] = []
     invalid = 0
     for row in parsed_rows:
         mapped = xlsx_row_to_lead_insert(row, source_file)
@@ -165,45 +221,38 @@ def insert_leads_skip_duplicates(
             "total": len(parsed_rows), "inserted_ids": [],
         }
 
-    # Build the set of existing (name, company) pairs in one query, restricted
-    # to names that appear in this upload to keep the response small.
-    incoming_names = list({p["name"] for p in payloads})
-    existing_resp = (
-        client.table(LEADS_TABLE)
-        .select("name, company")
-        .in_("name", incoming_names)
-        .execute()
-    )
-    existing_keys = {
-        (r["name"].strip().lower(), (r.get("company") or "").strip().lower())
-        for r in (existing_resp.data or [])
-    }
-
-    fresh_payloads = []
-    skipped = 0
-    seen_in_batch: set[tuple[str, str]] = set()
+    # Collapse intra-batch duplicates first — multiple rows in the same file
+    # mapping to the same dedupe_key would otherwise cause an upsert error.
+    deduped: dict[str, dict[str, Any]] = {}
+    intra_skipped = 0
     for p in payloads:
-        key = (p["name"].strip().lower(), (p["company"] or "").strip().lower())
-        if key in existing_keys or key in seen_in_batch:
-            skipped += 1
+        key = p["dedupe_key"]
+        if key in deduped:
+            intra_skipped += 1
             continue
-        seen_in_batch.add(key)
-        fresh_payloads.append(p)
+        deduped[key] = p
+    fresh_payloads = list(deduped.values())
 
     inserted = 0
     inserted_ids: list[int] = []
     if fresh_payloads:
-        # Supabase has a per-request payload cap; chunk to be safe on large files.
         CHUNK = 500
         for i in range(0, len(fresh_payloads), CHUNK):
             batch = fresh_payloads[i : i + CHUNK]
-            resp = client.table(LEADS_TABLE).insert(batch).execute()
+            # ignore_duplicates=True turns conflicts on dedupe_key into a no-op
+            # instead of raising. Returns only the genuinely inserted rows.
+            resp = (
+                client.table(LEADS_TABLE)
+                .upsert(batch, on_conflict="dedupe_key", ignore_duplicates=True)
+                .execute()
+            )
             returned = resp.data or []
-            inserted += len(returned) or len(batch)
+            inserted += len(returned)
             inserted_ids.extend(
                 r["id"] for r in returned if isinstance(r, dict) and "id" in r
             )
 
+    skipped = (len(payloads) - inserted)  # intra-batch + cross-batch combined
     logger.info(
         "leads_writer: inserted=%d skipped=%d invalid=%d total=%d source=%s",
         inserted, skipped, invalid, len(parsed_rows), source_file,
@@ -218,17 +267,16 @@ def insert_leads_skip_duplicates(
 
 
 # ---------------------------------------------------------------------------
-# SerpAPI + LLM enrichment for inserted leads.
+# SerpAPI + LLM enrichment (parallelized via thread pool, status-tracked).
 # ---------------------------------------------------------------------------
 
 
-def _row_to_leadrow(row: dict[str, Any]) -> LeadRow:
-    """Wrap a DB row in a LeadRow so the SerpAPI enricher can query it.
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-    Only the basic contact + location fields are fed into the search query;
-    pre-existing enrichment is intentionally excluded so we don't echo prior
-    enrichment results back into the new SerpAPI search.
-    """
+
+def _row_to_leadrow(row: dict[str, Any]) -> LeadRow:
+    """Wrap a DB row in a LeadRow so the SerpAPI enricher can query it."""
     enrichment = row.get("enrichment") or {}
     headers = ["Name", "Company", "Title", "Phone", "Email", "City", "State"]
     data = {
@@ -243,10 +291,27 @@ def _row_to_leadrow(row: dict[str, Any]) -> LeadRow:
     return LeadRow(headers=headers, data=data)
 
 
+def _mark_failed(client, lead_id: int, error: str, attempts: int) -> None:
+    try:
+        client.table(LEADS_TABLE).update({
+            "enrichment_status": "failed",
+            "enrichment_error": (error or "")[:500],
+            "enrichment_attempts": attempts + 1,
+            "updated_at": _now_iso(),
+        }).eq("id", lead_id).execute()
+    except Exception:
+        logger.exception("Failed to mark lead %d as failed", lead_id)
+
+
 def _enrich_single_lead(lead_id: int) -> bool:
-    """Enrich one lead by id. Returns True on success, False on any failure."""
-    # Local import keeps the route module light + avoids loading SerpAPI / LLM
-    # clients until enrichment actually runs.
+    """Enrich one lead by id. Returns True on success, False on any failure.
+
+    On failure, the row is marked enrichment_status='failed' with the error
+    message and attempts counter incremented — so the retry endpoint can pick
+    it up.
+    """
+    # Local import keeps the route module light and avoids loading SerpAPI /
+    # OpenRouter clients until enrichment actually runs.
     from app.services.serpapi_enricher import enrich_lead
 
     client = supabase_manager.get_client()
@@ -262,13 +327,15 @@ def _enrich_single_lead(lead_id: int) -> bool:
         return False
 
     row = fetched.data[0]
+    current_attempts = int(row.get("enrichment_attempts") or 0)
+
     try:
         enriched = enrich_lead(_row_to_leadrow(row))
-    except Exception:
+    except Exception as e:
         logger.exception("enrich_lead %d: enricher raised", lead_id)
+        _mark_failed(client, lead_id, str(e), current_attempts)
         return False
 
-    # Merge into the existing enrichment jsonb so any extras stay intact.
     existing = row.get("enrichment") or {}
     merged = {
         **existing,
@@ -292,10 +359,12 @@ def _enrich_single_lead(lead_id: int) -> bool:
 
     update_payload: dict[str, Any] = {
         "enrichment": merged,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": _now_iso(),
+        "enriched_at": _now_iso(),
+        "enrichment_status": "done",
+        "enrichment_error": None,
+        "enrichment_attempts": current_attempts + 1,
     }
-    # Only overwrite the top-level qualifier/tag if the enricher actually
-    # produced a value — keep whatever was on the row otherwise.
     if enriched.title_qualifier:
         update_payload["title_qualifier"] = enriched.title_qualifier
     if enriched.signal_tag:
@@ -303,35 +372,59 @@ def _enrich_single_lead(lead_id: int) -> bool:
 
     try:
         client.table(LEADS_TABLE).update(update_payload).eq("id", lead_id).execute()
-    except Exception:
+    except Exception as e:
         logger.exception("enrich_lead %d: DB update failed", lead_id)
+        _mark_failed(client, lead_id, str(e), current_attempts)
         return False
 
     return True
 
 
 def enrich_leads_in_background(lead_ids: list[int]) -> None:
-    """Run SerpAPI + LLM enrichment for each lead id; updates leads in place.
+    """Enrich a batch of leads concurrently via ThreadPoolExecutor.
 
-    Designed to be scheduled via FastAPI BackgroundTasks so the webhook can
-    return immediately. Continues past individual failures and sleeps between
-    SerpAPI calls to stay under rate limits.
+    Designed to be scheduled via FastAPI BackgroundTasks. Each task isolates
+    its own failure and writes its status to the DB, so a single bad row
+    can't poison the batch.
     """
     if not lead_ids:
         return
 
-    logger.info("Background enrichment starting for %d leads", len(lead_ids))
+    logger.info(
+        "Background enrichment starting: %d leads, %d concurrent workers",
+        len(lead_ids), ENRICH_CONCURRENCY,
+    )
     succeeded = 0
     failed = 0
-    for i, lead_id in enumerate(lead_ids):
-        if _enrich_single_lead(lead_id):
-            succeeded += 1
-        else:
-            failed += 1
-        if i < len(lead_ids) - 1:
-            time.sleep(ENRICH_DELAY_SECONDS)
+    with ThreadPoolExecutor(max_workers=ENRICH_CONCURRENCY) as executor:
+        for ok in executor.map(_enrich_single_lead, lead_ids):
+            if ok:
+                succeeded += 1
+            else:
+                failed += 1
 
     logger.info(
         "Background enrichment finished: succeeded=%d failed=%d total=%d",
         succeeded, failed, len(lead_ids),
     )
+
+
+def fetch_failed_lead_ids(limit: int = 100, max_attempts: int = 5) -> list[int]:
+    """Return ids of leads that failed enrichment and haven't been retried too often.
+
+    The retry endpoint feeds these into enrich_leads_in_background.
+    """
+    client = supabase_manager.get_client()
+    if not client:
+        raise RuntimeError("Supabase client unavailable")
+
+    resp = (
+        client.table(LEADS_TABLE)
+        .select("id")
+        .eq("enrichment_status", "failed")
+        .lt("enrichment_attempts", max_attempts)
+        .order("id")
+        .limit(limit)
+        .execute()
+    )
+    return [r["id"] for r in (resp.data or []) if "id" in r]

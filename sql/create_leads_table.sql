@@ -5,18 +5,26 @@
 -- jsonb so we can add new enrichment fields without schema migrations.
 
 CREATE TABLE IF NOT EXISTS public.leads (
-    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    name            TEXT NOT NULL,
-    company         TEXT,
-    title           TEXT,
-    phone           TEXT,
-    email           TEXT,
-    signal_tag      TEXT,          -- NEW_HIRE, LONG_TENURED, CAREER_MOVER, ...
-    title_qualifier TEXT,          -- DECISION_MAKER, INFLUENCER, IN_HOUSE, UNKNOWN
-    enrichment      JSONB NOT NULL DEFAULT '{}',
-    source_file     TEXT,          -- which uploaded file this row came from
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name                TEXT NOT NULL,
+    company             TEXT,
+    title               TEXT,
+    phone               TEXT,
+    email               TEXT,
+    signal_tag          TEXT,          -- NEW_HIRE, LONG_TENURED, CAREER_MOVER, ...
+    title_qualifier     TEXT,          -- DECISION_MAKER, INFLUENCER, IN_HOUSE, UNKNOWN
+    enrichment          JSONB NOT NULL DEFAULT '{}',
+    source_file         TEXT,          -- which uploaded file this row came from
+    -- Enrichment tracking (lets the retry sweep find failed/stuck rows)
+    enrichment_status   TEXT NOT NULL DEFAULT 'pending'
+        CHECK (enrichment_status IN ('pending','done','failed','skipped')),
+    enrichment_attempts INT NOT NULL DEFAULT 0,
+    enrichment_error    TEXT,
+    enriched_at         TIMESTAMPTZ,
+    -- Canonical identity key for dedupe (phone:NNN... or nc:name|normalized_company)
+    dedupe_key          TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Case-insensitive name lookup (powers find_lead_by_name).
@@ -31,6 +39,13 @@ CREATE INDEX IF NOT EXISTS leads_signal_tag_idx
 
 CREATE INDEX IF NOT EXISTS leads_title_qualifier_idx
     ON public.leads (title_qualifier);
+
+CREATE INDEX IF NOT EXISTS leads_enrichment_status_idx
+    ON public.leads (enrichment_status);
+
+CREATE UNIQUE INDEX IF NOT EXISTS leads_dedupe_key_uidx
+    ON public.leads (dedupe_key)
+    WHERE dedupe_key IS NOT NULL;
 
 -- Allow the service-role key (used by the FastAPI backend) full access.
 -- If you turn on RLS later, add policies for the anon/authenticated roles.
