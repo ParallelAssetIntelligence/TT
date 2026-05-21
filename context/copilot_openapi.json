@@ -465,6 +465,61 @@
             "type": "string",
             "description": "AI-generated 2-3 sentence cold-call opener in Matt's voice",
             "example": "Hi Leigh, this is Matt from The Tustin Group..."
+          },
+          "website": {
+            "type": "string",
+            "description": "Company website discovered via SerpAPI",
+            "example": "https://westtown.edu"
+          },
+          "location": {
+            "type": "string",
+            "description": "Location string extracted from SerpAPI results (city/region)",
+            "example": "West Chester, PA"
+          },
+          "description": {
+            "type": "string",
+            "description": "Short company / lead description extracted from SerpAPI",
+            "example": "Independent K-12 day and boarding school in southeastern PA"
+          },
+          "linkedin_company_description": {
+            "type": "string",
+            "description": "Snippet from the company's LinkedIn page",
+            "example": "Independent Quaker school, founded 1799..."
+          },
+          "enrichment_status": {
+            "type": "string",
+            "description": "Where this lead is in the SerpAPI/LLM enrichment pipeline: pending (queued), done (enriched successfully), failed (retries exhausted), skipped (already had enrichment on upload)",
+            "example": "done"
+          },
+          "enrichment_attempts": {
+            "type": "integer",
+            "description": "How many times enrichment has been attempted on this row",
+            "example": 1
+          },
+          "enrichment_error": {
+            "type": "string",
+            "description": "Last error message if enrichment_status is 'failed'; empty otherwise",
+            "example": ""
+          },
+          "enriched_at": {
+            "type": "string",
+            "description": "ISO timestamp when enrichment last completed successfully",
+            "example": "2026-05-21T20:34:11+00:00"
+          },
+          "source_file": {
+            "type": "string",
+            "description": "Which uploaded file this lead originated from",
+            "example": "20260521_220636_test_leads.xlsx"
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When the lead row was first inserted",
+            "example": "2026-05-21T20:30:00+00:00"
+          },
+          "updated_at": {
+            "type": "string",
+            "description": "When the lead row was last modified",
+            "example": "2026-05-21T20:34:11+00:00"
           }
         }
       },
