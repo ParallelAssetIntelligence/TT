@@ -122,4 +122,28 @@ VALUES
             'Hi Leigh, this is Matt from The Tustin Group — we''re a commercial building services company working with schools and institutions across the greater Philadelphia area. I''m calling because most facilities teams like yours are managing HVAC, water treatment, and fire safety across multiple vendors on a reactive basis…'
     ),
     'dummy_seed.xlsx'
+),
+(
+    'Harsh Soni',
+    'Liberty Property Trust',
+    'Director of Operations',
+    '484-555-9012',
+    'harsh.soni@libertyproperty.com',
+    'CAREER_MOVER',
+    'DECISION_MAKER',
+    jsonb_build_object(
+        'city', 'Malvern',
+        'state', 'PA',
+        'linkedin_url', 'https://linkedin.com/in/harshsoni',
+        'linkedin_headline', 'Director of Operations at Liberty Property Trust',
+        'linkedin_summary', 'Operations leader focused on portfolio-wide facility performance across commercial real estate.',
+        'tenure_months', 14,
+        'tenure_label', 'MID_TENURE',
+        'prior_company_1', 'Brandywine Realty Trust',
+        'prior_company_2', 'CBRE',
+        'script_used', 'Script 4: Career Mover',
+        'personalized_opener',
+            'Hey Harsh, saw you moved from Brandywine to Liberty about a year ago — usually a good window to revisit vendor contracts across a portfolio. Worth a 15-minute conversation on benchmarking HVAC and water spend?'
+    ),
+    'dummy_seed.xlsx'
 );
