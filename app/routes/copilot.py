@@ -171,12 +171,16 @@ def _stage_xlsx_bytes(file_bytes: bytes, filename: str) -> dict:
 
 def _normalize_share_url(url: str) -> str:
     """Convert common share-page URLs to direct-download URLs."""
-    # Google Sheets: https://docs.google.com/spreadsheets/d/{id}/edit?... → /export?format=xlsx
+    # Google Sheets: docs.google.com/spreadsheets/d/{id}/edit → /export?format=xlsx
     m = re.match(r"https?://docs\.google\.com/spreadsheets/d/([^/]+)", url)
     if m:
         return f"https://docs.google.com/spreadsheets/d/{m.group(1)}/export?format=xlsx"
-    # Google Drive file: https://drive.google.com/file/d/{id}/view?... → uc?export=download&id={id}
-    m = re.match(r"https?://drive\.google\.com/file/d/([^/]+)/", url)
+    # Google Drive file view: drive.google.com/file/d/{id}/view → uc?export=download
+    m = re.match(r"https?://drive\.google\.com/file/d/([^/]+)", url)
+    if m:
+        return f"https://drive.google.com/uc?export=download&id={m.group(1)}"
+    # Google Drive open?id=: drive.google.com/open?id={id} → uc?export=download
+    m = re.match(r"https?://drive\.google\.com/open\?id=([^&#]+)", url)
     if m:
         return f"https://drive.google.com/uc?export=download&id={m.group(1)}"
     # Dropbox: force dl=1 so the server returns the file instead of an HTML preview
@@ -185,8 +189,14 @@ def _normalize_share_url(url: str) -> str:
         q = parse_qs(parsed.query, keep_blank_values=True)
         q["dl"] = ["1"]
         return urlunparse(parsed._replace(query=urlencode(q, doseq=True)))
-    # OneDrive: append download=1 to short or long share links
-    if ("1drv.ms" in url or "onedrive.live.com" in url) and "download=1" not in url:
+    # SharePoint (incl. OneDrive for Business) and OneDrive personal: append download=1.
+    # Covers tenant.sharepoint.com share links (:x:/g/, :b:/g/, etc.), 1drv.ms short
+    # links, and onedrive.live.com personal links.
+    if (
+        "sharepoint.com" in url
+        or "1drv.ms" in url
+        or "onedrive.live.com" in url
+    ) and "download=1" not in url:
         sep = "&" if "?" in url else "?"
         return f"{url}{sep}download=1"
     return url
