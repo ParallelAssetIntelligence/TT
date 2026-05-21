@@ -96,18 +96,26 @@
         }
       }
     },
-    "/copilot/enrich-from-url": {
+    "/copilot/enrich-file": {
       "post": {
-        "summary": "Enrich Excel file from URL",
-        "description": "ALWAYS use this tool when Matt UPLOADS or DROPS an Excel/xlsx file in the chat, OR when he asks to 'enrich this', 'process this file', 'enrich my leads', 'run enrichment'. Pass the attachment's content URL. The tool downloads the file, enriches every row with LinkedIn data + personalized openers (using Tustin's 6 cold-call scripts), uploads the result to cloud storage, and returns a public download URL. May take 5-15 minutes for 700-row files — that is expected.",
-        "operationId": "EnrichFileFromUrl",
+        "summary": "Enrich uploaded Excel file",
+        "description": "ALWAYS use this tool when Matt UPLOADS, DROPS, or ATTACHES an Excel/xlsx file in the chat, OR says 'enrich this', 'process this file', 'enrich my leads', 'run enrichment'. Pass the file as multipart/form-data (the file itself, NOT a URL). The tool enriches every row with LinkedIn data + personalized openers using Tustin's 6 cold-call scripts, uploads the result to cloud storage, and returns a public download URL. May take 1-2 min for 5 rows, 5-15 min for 700-row files — that is expected.",
+        "operationId": "EnrichFile",
         "tags": ["CoPilot"],
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": {
+            "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/EnrichFromUrlRequest"
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The Excel file (.xlsx) Matt uploaded"
+                  }
+                }
               }
             }
           }
@@ -118,13 +126,13 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EnrichFromUrlResponse"
+                  "$ref": "#/components/schemas/EnrichFileResponse"
                 }
               }
             }
           },
           "400": {
-            "description": "Bad file or download error",
+            "description": "Bad file or parse error",
             "content": {
               "application/json": {
                 "schema": {
@@ -424,23 +432,7 @@
           }
         }
       },
-      "EnrichFromUrlRequest": {
-        "type": "object",
-        "required": ["file_url"],
-        "properties": {
-          "file_url": {
-            "type": "string",
-            "description": "Public or auth URL of the Excel file to download and enrich. From Teams, this is the attachment's ContentUrl.",
-            "example": "https://attachments.office.com/.../leads_week22.xlsx"
-          },
-          "filename": {
-            "type": "string",
-            "description": "Original filename — used to name the enriched output file",
-            "example": "leads_week22.xlsx"
-          }
-        }
-      },
-      "EnrichFromUrlResponse": {
+      "EnrichFileResponse": {
         "type": "object",
         "required": ["status", "download_url", "message"],
         "properties": {
