@@ -1,11 +1,15 @@
-"""Insert parsed Excel rows into the Supabase `leads` table.
+"""Insert parsed Excel rows into the Supabase `leads` table + run SerpAPI enrichment.
 
 Used by /webhooks/storage-uploaded when a new xlsx lands in the uploaded-leads
 bucket. Maps the loose Excel column conventions (Name vs First+Last, Company vs
 Account, etc.) onto the leads schema, then skips any rows whose (name, company)
-pair already exists.
+pair already exists. After insert, the webhook schedules
+enrich_leads_in_background() so SerpAPI + the LLM intelligence layer fill in
+LinkedIn, tenure, opener, etc. without blocking the webhook response.
 """
 import logging
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 from app.databaseconnection import supabase_manager
@@ -14,6 +18,7 @@ from app.models.lead import LeadRow
 logger = logging.getLogger(__name__)
 
 LEADS_TABLE = "leads"
+ENRICH_DELAY_SECONDS = 1.0  # rate-limit gap between SerpAPI calls
 
 # Column-name candidates — handles the most common ZoomInfo / Apollo / generic
 # export naming variations. Lowercased before matching.
@@ -157,7 +162,7 @@ def insert_leads_skip_duplicates(
     if not payloads:
         return {
             "inserted": 0, "skipped": 0, "invalid": invalid,
-            "total": len(parsed_rows),
+            "total": len(parsed_rows), "inserted_ids": [],
         }
 
     # Build the set of existing (name, company) pairs in one query, restricted
@@ -186,13 +191,18 @@ def insert_leads_skip_duplicates(
         fresh_payloads.append(p)
 
     inserted = 0
+    inserted_ids: list[int] = []
     if fresh_payloads:
         # Supabase has a per-request payload cap; chunk to be safe on large files.
         CHUNK = 500
         for i in range(0, len(fresh_payloads), CHUNK):
             batch = fresh_payloads[i : i + CHUNK]
             resp = client.table(LEADS_TABLE).insert(batch).execute()
-            inserted += len(resp.data or batch)
+            returned = resp.data or []
+            inserted += len(returned) or len(batch)
+            inserted_ids.extend(
+                r["id"] for r in returned if isinstance(r, dict) and "id" in r
+            )
 
     logger.info(
         "leads_writer: inserted=%d skipped=%d invalid=%d total=%d source=%s",
@@ -203,4 +213,125 @@ def insert_leads_skip_duplicates(
         "skipped": skipped,
         "invalid": invalid,
         "total": len(parsed_rows),
+        "inserted_ids": inserted_ids,
     }
+
+
+# ---------------------------------------------------------------------------
+# SerpAPI + LLM enrichment for inserted leads.
+# ---------------------------------------------------------------------------
+
+
+def _row_to_leadrow(row: dict[str, Any]) -> LeadRow:
+    """Wrap a DB row in a LeadRow so the SerpAPI enricher can query it.
+
+    Only the basic contact + location fields are fed into the search query;
+    pre-existing enrichment is intentionally excluded so we don't echo prior
+    enrichment results back into the new SerpAPI search.
+    """
+    enrichment = row.get("enrichment") or {}
+    headers = ["Name", "Company", "Title", "Phone", "Email", "City", "State"]
+    data = {
+        "Name": row.get("name") or "",
+        "Company": row.get("company") or "",
+        "Title": row.get("title") or "",
+        "Phone": row.get("phone") or "",
+        "Email": row.get("email") or "",
+        "City": enrichment.get("city") or "",
+        "State": enrichment.get("state") or "",
+    }
+    return LeadRow(headers=headers, data=data)
+
+
+def _enrich_single_lead(lead_id: int) -> bool:
+    """Enrich one lead by id. Returns True on success, False on any failure."""
+    # Local import keeps the route module light + avoids loading SerpAPI / LLM
+    # clients until enrichment actually runs.
+    from app.services.serpapi_enricher import enrich_lead
+
+    client = supabase_manager.get_client()
+    if not client:
+        logger.error("enrich_lead %d: Supabase client unavailable", lead_id)
+        return False
+
+    fetched = (
+        client.table(LEADS_TABLE).select("*").eq("id", lead_id).limit(1).execute()
+    )
+    if not fetched.data:
+        logger.warning("enrich_lead %d: row not found", lead_id)
+        return False
+
+    row = fetched.data[0]
+    try:
+        enriched = enrich_lead(_row_to_leadrow(row))
+    except Exception:
+        logger.exception("enrich_lead %d: enricher raised", lead_id)
+        return False
+
+    # Merge into the existing enrichment jsonb so any extras stay intact.
+    existing = row.get("enrichment") or {}
+    merged = {
+        **existing,
+        "website": enriched.website or existing.get("website") or "",
+        "linkedin_url": enriched.linkedin or existing.get("linkedin_url") or "",
+        "linkedin_headline": enriched.linkedin_headline or existing.get("linkedin_headline") or "",
+        "linkedin_summary": enriched.linkedin_summary or existing.get("linkedin_summary") or "",
+        "linkedin_company_description":
+            enriched.linkedin_company_description or existing.get("linkedin_company_description") or "",
+        "location": enriched.location or existing.get("location") or "",
+        "description": enriched.description or existing.get("description") or "",
+        "tenure_months": enriched.tenure_months
+            if enriched.tenure_months is not None else existing.get("tenure_months"),
+        "tenure_label": enriched.tenure_label or existing.get("tenure_label") or "",
+        "prior_company_1": enriched.prior_company_1 or existing.get("prior_company_1") or "",
+        "prior_company_2": enriched.prior_company_2 or existing.get("prior_company_2") or "",
+        "script_used": enriched.script_used or existing.get("script_used") or "",
+        "personalized_opener":
+            enriched.personalized_opener or existing.get("personalized_opener") or "",
+    }
+
+    update_payload: dict[str, Any] = {
+        "enrichment": merged,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    # Only overwrite the top-level qualifier/tag if the enricher actually
+    # produced a value — keep whatever was on the row otherwise.
+    if enriched.title_qualifier:
+        update_payload["title_qualifier"] = enriched.title_qualifier
+    if enriched.signal_tag:
+        update_payload["signal_tag"] = enriched.signal_tag
+
+    try:
+        client.table(LEADS_TABLE).update(update_payload).eq("id", lead_id).execute()
+    except Exception:
+        logger.exception("enrich_lead %d: DB update failed", lead_id)
+        return False
+
+    return True
+
+
+def enrich_leads_in_background(lead_ids: list[int]) -> None:
+    """Run SerpAPI + LLM enrichment for each lead id; updates leads in place.
+
+    Designed to be scheduled via FastAPI BackgroundTasks so the webhook can
+    return immediately. Continues past individual failures and sleeps between
+    SerpAPI calls to stay under rate limits.
+    """
+    if not lead_ids:
+        return
+
+    logger.info("Background enrichment starting for %d leads", len(lead_ids))
+    succeeded = 0
+    failed = 0
+    for i, lead_id in enumerate(lead_ids):
+        if _enrich_single_lead(lead_id):
+            succeeded += 1
+        else:
+            failed += 1
+        if i < len(lead_ids) - 1:
+            time.sleep(ENRICH_DELAY_SECONDS)
+
+    logger.info(
+        "Background enrichment finished: succeeded=%d failed=%d total=%d",
+        succeeded, failed, len(lead_ids),
+    )

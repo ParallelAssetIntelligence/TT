@@ -18,12 +18,15 @@ import logging
 import os
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.databaseconnection import supabase_manager
 from app.services.excel_parser import parse_excel
-from app.services.leads_writer import insert_leads_skip_duplicates
+from app.services.leads_writer import (
+    enrich_leads_in_background,
+    insert_leads_skip_duplicates,
+)
 from app.services.storage_uploader import UPLOADED_BUCKET
 
 logger = logging.getLogger(__name__)
@@ -51,6 +54,7 @@ class SupabaseStorageWebhook(BaseModel):
 @router.post("/storage-uploaded", status_code=status.HTTP_200_OK)
 async def storage_uploaded(
     payload: SupabaseStorageWebhook,
+    background_tasks: BackgroundTasks,
     x_webhook_secret: str | None = Header(default=None),
 ) -> dict[str, Any]:
     """Auto-populate `leads` when a new xlsx hits the uploaded-leads bucket."""
@@ -115,4 +119,15 @@ async def storage_uploaded(
             detail=f"Failed to insert leads from {object_path}: {e}",
         )
 
-    return {"status": "ok", "file": object_path, **result}
+    # Fire enrichment after the response is sent so the webhook returns fast.
+    # SerpAPI + the LLM run ~2-4s per lead, well over Supabase's 10s timeout.
+    inserted_ids = result.pop("inserted_ids", [])
+    if inserted_ids:
+        background_tasks.add_task(enrich_leads_in_background, inserted_ids)
+
+    return {
+        "status": "ok",
+        "file": object_path,
+        "enrichment_queued": len(inserted_ids),
+        **result,
+    }
