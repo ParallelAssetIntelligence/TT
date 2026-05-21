@@ -138,6 +138,48 @@
         }
       }
     },
+    "/copilot/upload-from-url": {
+      "post": {
+        "summary": "Upload leads from a public URL",
+        "description": "Call this tool when the user pastes, sends, or shares a URL (link) that points to an .xlsx/.xls leads file — for example a Google Drive share link, a Dropbox link, a OneDrive link, or any direct HTTPS download URL. The tool downloads the file server-side, validates it (extension, size, Excel readability, row count), stages it in the Supabase 'uploaded-leads' bucket, and returns a confirmation message the agent should show the user verbatim. The link must be set to 'anyone with the link can view'. Use this INSTEAD of upload-file when the user gives a URL rather than attaching a file. Do NOT use for individual lead questions by name — use brief or lookup for that.",
+        "operationId": "UploadLeadsFromUrl",
+        "tags": ["CoPilot"],
+        "x-ms-summary": "Upload leads from URL",
+        "x-ms-visibility": "important",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadLeadsFromUrlRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File downloaded and staged successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadLeadsFileResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad URL, blocked host, download failed, or invalid Excel file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/copilot/lookup": {
       "post": {
         "summary": "Look up a lead by name",
@@ -441,6 +483,25 @@
             "description": "Base64-encoded contents of the .xlsx file. In a Copilot Studio Topic, bind to LeadsFile.Content.",
             "example": "UEsDBBQABgAIAAAAIQ...",
             "x-ms-summary": "File contents (base64)"
+          }
+        }
+      },
+      "UploadLeadsFromUrlRequest": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Public HTTPS URL to a .xlsx/.xls file. Google Drive, Dropbox, and OneDrive share links are auto-converted to direct downloads. Must be set to 'anyone with the link can view'.",
+            "example": "https://drive.google.com/file/d/1aBcDeF/view?usp=sharing",
+            "x-ms-summary": "File URL"
+          },
+          "filename": {
+            "type": "string",
+            "description": "Optional override for the stored filename. If omitted, derived from the Content-Disposition header or URL path. Include .xlsx or .xls extension.",
+            "example": "leads_week22.xlsx",
+            "x-ms-summary": "Filename (optional)"
           }
         }
       },
