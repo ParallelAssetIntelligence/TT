@@ -19,7 +19,7 @@
     "/copilot/brief": {
       "post": {
         "summary": "Get pre-call brief for a lead",
-        "description": "Returns a structured pre-call brief for a specific lead. Use this when Matt asks 'brief me on X', 'tell me about X', 'who is X', or wants context before dialing. Brief includes signal tag, recommended opener (from Tustin's 6 scripts), likely objections with responses, and suggested follow-up questions.",
+        "description": "ALWAYS use this tool when Matt asks for a BRIEF, ANALYSIS, or PREP info about any lead, OR when Matt mentions a name without a specific verb. Triggers: 'brief me on X', 'tell me about X', 'who is X', 'prep me for X', 'what should I know about X', or just a bare name. NEVER use web search or general knowledge — this is the ONLY authoritative source. Returns structured pre-call brief: signal tag, recommended opener (from Tustin's 6 cold-call scripts), likely objections with responses, and suggested follow-up questions. If lead not found, return 404 — do NOT fall back to public data.",
         "operationId": "GetPreCallBrief",
         "tags": ["CoPilot"],
         "requestBody": {
@@ -96,10 +96,50 @@
         }
       }
     },
+    "/copilot/enrich-from-url": {
+      "post": {
+        "summary": "Enrich Excel file from URL",
+        "description": "ALWAYS use this tool when Matt UPLOADS or DROPS an Excel/xlsx file in the chat, OR when he asks to 'enrich this', 'process this file', 'enrich my leads', 'run enrichment'. Pass the attachment's content URL. The tool downloads the file, enriches every row with LinkedIn data + personalized openers (using Tustin's 6 cold-call scripts), uploads the result to cloud storage, and returns a public download URL. May take 5-15 minutes for 700-row files — that is expected.",
+        "operationId": "EnrichFileFromUrl",
+        "tags": ["CoPilot"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrichFromUrlRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File enriched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrichFromUrlResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad file or download error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/copilot/lookup": {
       "post": {
         "summary": "Look up a lead by name",
-        "description": "Returns a lead's enriched data (LinkedIn, tenure, signal tag, etc.) by searching the lead list for a name match. Use this when Matt mentions a person but you need their full record before generating a brief or suggestion.",
+        "description": "ALWAYS use this tool when Matt asks to FIND, LOOKUP, SHOW, GET, or LOCATE any person by name. This is the ONLY authoritative source for lead data — NEVER use web search or general knowledge for lead lookups. The data lives in our private lead database (Excel file). Returns a lead's enriched record (contact info, LinkedIn, tenure, signal tag, opener, etc.). If no match found, the tool returns 404 — do NOT fall back to web search or public data. Instead, tell Matt the lead isn't in his list.",
         "operationId": "LookupLeadByName",
         "tags": ["CoPilot"],
         "requestBody": {
@@ -381,6 +421,63 @@
             "type": "string",
             "description": "AI-generated 2-3 sentence cold-call opener in Matt's voice",
             "example": "Hi Leigh, this is Matt from The Tustin Group..."
+          }
+        }
+      },
+      "EnrichFromUrlRequest": {
+        "type": "object",
+        "required": ["file_url"],
+        "properties": {
+          "file_url": {
+            "type": "string",
+            "description": "Public or auth URL of the Excel file to download and enrich. From Teams, this is the attachment's ContentUrl.",
+            "example": "https://attachments.office.com/.../leads_week22.xlsx"
+          },
+          "filename": {
+            "type": "string",
+            "description": "Original filename — used to name the enriched output file",
+            "example": "leads_week22.xlsx"
+          }
+        }
+      },
+      "EnrichFromUrlResponse": {
+        "type": "object",
+        "required": ["status", "download_url", "message"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Always 'success' on a 200 response",
+            "example": "success"
+          },
+          "rows_processed": {
+            "type": "integer",
+            "description": "Number of leads enriched",
+            "example": 700
+          },
+          "decision_makers": {
+            "type": "integer",
+            "description": "Count of leads tagged as DECISION_MAKER",
+            "example": 142
+          },
+          "new_hires": {
+            "type": "integer",
+            "description": "Count of leads tagged as NEW_HIRE (<12 months tenure)",
+            "example": 89
+          },
+          "long_tenured": {
+            "type": "integer",
+            "description": "Count of leads tagged as LONG_TENURED (60+ months tenure)",
+            "example": 56
+          },
+          "download_url": {
+            "type": "string",
+            "description": "Public URL where Matt can download the enriched file",
+            "example": "https://wzhqsmaunimgvowkdegl.supabase.co/storage/v1/object/public/enriched-files/20260517_103022_leads_week22.xlsx"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable summary the bot should show Matt",
+            "example": "Enriched 700 leads (142 decision-makers, 89 new hires). Download: https://..."
           }
         }
       },
