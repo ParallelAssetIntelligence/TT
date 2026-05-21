@@ -416,7 +416,8 @@ def enrich_leads_in_background(lead_ids: list[int]) -> None:
 
     Designed to be scheduled via FastAPI BackgroundTasks. Each task isolates
     its own failure and writes its status to the DB, so a single bad row
-    can't poison the batch.
+    can't poison the batch. Posts a single Teams notification after the
+    whole batch finishes.
     """
     if not lead_ids:
         return
@@ -438,6 +439,57 @@ def enrich_leads_in_background(lead_ids: list[int]) -> None:
         "Background enrichment finished: succeeded=%d failed=%d total=%d",
         succeeded, failed, len(lead_ids),
     )
+
+    _notify_batch_complete(lead_ids, succeeded=succeeded, failed=failed)
+
+
+def _notify_batch_complete(lead_ids: list[int], succeeded: int, failed: int) -> None:
+    """Send one Teams card summarizing the batch. Best-effort: never raises."""
+    try:
+        from app.services.teams_notifier import (
+            build_public_url,
+            send_enrichment_complete,
+        )
+
+        client = supabase_manager.get_client()
+        if not client:
+            return
+
+        # Pull the source_file and tenure_label tally for the rows we just touched.
+        resp = (
+            client.table(LEADS_TABLE)
+            .select("source_file, enrichment")
+            .in_("id", lead_ids)
+            .execute()
+        )
+        rows = resp.data or []
+        if not rows:
+            return
+
+        source_file = next(
+            (r["source_file"] for r in rows if r.get("source_file")),
+            "leads.xlsx",
+        )
+        new_hires = sum(
+            1 for r in rows
+            if (r.get("enrichment") or {}).get("tenure_label") == "NEW_HIRE"
+        )
+        long_tenured = sum(
+            1 for r in rows
+            if (r.get("enrichment") or {}).get("tenure_label") == "LONG_TENURED"
+        )
+
+        send_enrichment_complete(
+            filename=source_file,
+            rows_processed=succeeded,
+            rows_failed=failed,
+            new_hires=new_hires,
+            long_tenured=long_tenured,
+            file_url=build_public_url(source_file),
+        )
+    except Exception:
+        # Notifications are advisory — never let a Teams hiccup break the pipeline.
+        logger.exception("Teams notification failed (continuing anyway)")
 
 
 def fetch_failed_lead_ids(limit: int = 100, max_attempts: int = 5) -> list[int]:
