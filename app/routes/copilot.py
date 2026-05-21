@@ -171,7 +171,11 @@ def _stage_xlsx_bytes(file_bytes: bytes, filename: str) -> dict:
 
 def _normalize_share_url(url: str) -> str:
     """Convert common share-page URLs to direct-download URLs."""
-    # Google Drive: https://drive.google.com/file/d/{id}/view?... → uc?export=download&id={id}
+    # Google Sheets: https://docs.google.com/spreadsheets/d/{id}/edit?... → /export?format=xlsx
+    m = re.match(r"https?://docs\.google\.com/spreadsheets/d/([^/]+)", url)
+    if m:
+        return f"https://docs.google.com/spreadsheets/d/{m.group(1)}/export?format=xlsx"
+    # Google Drive file: https://drive.google.com/file/d/{id}/view?... → uc?export=download&id={id}
     m = re.match(r"https?://drive\.google\.com/file/d/([^/]+)/", url)
     if m:
         return f"https://drive.google.com/uc?export=download&id={m.group(1)}"
