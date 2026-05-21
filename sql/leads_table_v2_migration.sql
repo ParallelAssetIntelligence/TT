@@ -21,11 +21,14 @@ ALTER TABLE public.leads
 CREATE INDEX IF NOT EXISTS leads_enrichment_status_idx
     ON public.leads (enrichment_status);
 
--- Partial unique index — only rows with a dedupe_key participate, so the dummy
--- rows seeded before this migration won't collide with each other.
-CREATE UNIQUE INDEX IF NOT EXISTS leads_dedupe_key_uidx
-    ON public.leads (dedupe_key)
-    WHERE dedupe_key IS NOT NULL;
+-- Full (non-partial) unique index — PostgREST's INSERT ... ON CONFLICT (col)
+-- requires a matching full unique constraint; partial indexes are rejected
+-- with error 42P10. NULL dedupe_key values are still permitted because
+-- Postgres treats them as distinct in unique indexes (so legacy rows without
+-- a dedupe_key won't collide with each other).
+DROP INDEX IF EXISTS public.leads_dedupe_key_uidx;
+CREATE UNIQUE INDEX leads_dedupe_key_uidx
+    ON public.leads (dedupe_key);
 
 -- ---------------------------------------------------------------------------
 -- Helper expression for building the canonical dedupe key. Kept here as a

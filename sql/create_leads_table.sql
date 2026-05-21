@@ -43,9 +43,11 @@ CREATE INDEX IF NOT EXISTS leads_title_qualifier_idx
 CREATE INDEX IF NOT EXISTS leads_enrichment_status_idx
     ON public.leads (enrichment_status);
 
+-- Full unique index (not partial) — PostgREST's ON CONFLICT (col) target
+-- only accepts non-partial unique constraints. NULLs are distinct by default
+-- so legacy rows without a dedupe_key won't collide.
 CREATE UNIQUE INDEX IF NOT EXISTS leads_dedupe_key_uidx
-    ON public.leads (dedupe_key)
-    WHERE dedupe_key IS NOT NULL;
+    ON public.leads (dedupe_key);
 
 -- Allow the service-role key (used by the FastAPI backend) full access.
 -- If you turn on RLS later, add policies for the anon/authenticated roles.
