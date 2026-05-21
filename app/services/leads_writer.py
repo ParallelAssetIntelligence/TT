@@ -14,6 +14,7 @@ can re-attempt failed rows.
 import logging
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
@@ -28,6 +29,13 @@ LEADS_TABLE = "leads"
 # Parallel SerpAPI + LLM calls. 5 is a safe default — SerpAPI's free tier
 # allows ~100 req/min, and each enrichment costs 1 SerpAPI + 1 OpenRouter call.
 ENRICH_CONCURRENCY = int(os.getenv("ENRICH_CONCURRENCY", "5"))
+
+# Inline retry for transient enricher errors (network blips, rate limits, brief
+# LLM outages). Each retry sleeps with exponential backoff: 1s, 2s, 4s. Only
+# applies inside a single enrichment attempt — the leads.enrichment_attempts
+# counter still increments by 1 per call to _enrich_single_lead.
+INLINE_RETRY_ATTEMPTS = int(os.getenv("ENRICH_INLINE_RETRIES", "3"))
+INLINE_RETRY_BACKOFF_BASE_SECONDS = 1.0
 
 # Column-name candidates — handles the most common ZoomInfo / Apollo / generic
 # export naming variations. Lowercased before matching.
@@ -328,12 +336,35 @@ def _enrich_single_lead(lead_id: int) -> bool:
 
     row = fetched.data[0]
     current_attempts = int(row.get("enrichment_attempts") or 0)
+    leadrow = _row_to_leadrow(row)
 
-    try:
-        enriched = enrich_lead(_row_to_leadrow(row))
-    except Exception as e:
-        logger.exception("enrich_lead %d: enricher raised", lead_id)
-        _mark_failed(client, lead_id, str(e), current_attempts)
+    # Inline retry for transient errors. Most SerpAPI errors are swallowed
+    # inside enrich_lead() (returns blank EnrichedData), but the LLM call can
+    # raise on rate limits or 5xx — those benefit from a quick retry.
+    enriched = None
+    last_error: str | None = None
+    for attempt_idx in range(INLINE_RETRY_ATTEMPTS):
+        try:
+            enriched = enrich_lead(leadrow)
+            break
+        except Exception as e:
+            last_error = str(e)[:300] or e.__class__.__name__
+            remaining = INLINE_RETRY_ATTEMPTS - attempt_idx - 1
+            if remaining > 0:
+                wait = INLINE_RETRY_BACKOFF_BASE_SECONDS * (2 ** attempt_idx)
+                logger.warning(
+                    "enrich_lead %d: attempt %d/%d failed (%s) — retrying in %ds",
+                    lead_id, attempt_idx + 1, INLINE_RETRY_ATTEMPTS, last_error, wait,
+                )
+                time.sleep(wait)
+            else:
+                logger.error(
+                    "enrich_lead %d: all %d inline retries exhausted (%s)",
+                    lead_id, INLINE_RETRY_ATTEMPTS, last_error,
+                )
+
+    if enriched is None:
+        _mark_failed(client, lead_id, last_error or "unknown error", current_attempts)
         return False
 
     existing = row.get("enrichment") or {}
