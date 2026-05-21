@@ -1,10 +1,10 @@
-"""Upload enriched Excel files to Supabase Storage.
+"""Upload Excel files to Supabase Storage.
 
-When Matt drops a file in the Teams bot chat, we enrich it and need to
-return a download link. Supabase Storage gives us a public URL for free.
+Two buckets:
+  - uploaded-leads:  raw files Matt drops in chat, staged for enrichment
+  - enriched-files:  outputs we hand back to Matt as download links
 
 Bucket setup (one-time, do this in Supabase dashboard):
-  - Name: enriched-files
   - Public: yes
   - File size limit: 50 MB
 """
@@ -16,16 +16,26 @@ from supabase import create_client
 
 logger = logging.getLogger(__name__)
 
-BUCKET = "enriched-files"
+ENRICHED_BUCKET = "enriched-files"
+UPLOADED_BUCKET = "uploaded-leads"
 EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def upload_enriched_file(file_bytes: bytes, original_filename: str = "leads.xlsx") -> str:
-    """Upload enriched Excel to Supabase Storage. Returns public download URL.
+    """Upload enriched Excel to Supabase Storage. Returns public download URL."""
+    return _upload_to_bucket(ENRICHED_BUCKET, file_bytes, original_filename)
 
-    Raises RuntimeError on Supabase config issues so the calling endpoint can
-    surface a clean error to the bot.
+
+def upload_uploaded_file(file_bytes: bytes, original_filename: str = "leads.xlsx") -> tuple[str, str]:
+    """Stage a raw uploaded Excel in the uploaded-leads bucket.
+
+    Returns (storage_path, public_url). The path is what we'll hand to the
+    enrichment job; the URL is what we surface to Matt for confirmation.
     """
+    return _upload_to_bucket(UPLOADED_BUCKET, file_bytes, original_filename, return_path=True)
+
+
+def _upload_to_bucket(bucket: str, file_bytes: bytes, original_filename: str, return_path: bool = False):
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_KEY")
     if not url or not key:
@@ -38,7 +48,7 @@ def upload_enriched_file(file_bytes: bytes, original_filename: str = "leads.xlsx
     storage_path = f"{timestamp}_{safe_name}"
 
     try:
-        client.storage.from_(BUCKET).upload(
+        client.storage.from_(bucket).upload(
             path=storage_path,
             file=file_bytes,
             file_options={
@@ -48,14 +58,12 @@ def upload_enriched_file(file_bytes: bytes, original_filename: str = "leads.xlsx
             },
         )
     except Exception as e:
-        # The Supabase client raises StorageApiError when the bucket is missing
-        # or when the file already exists (we use timestamps so collisions are rare).
-        logger.error(f"Supabase upload failed: {e}")
+        logger.error(f"Supabase upload to {bucket} failed: {e}")
         raise RuntimeError(f"Storage upload failed: {e}") from e
 
-    public_url = client.storage.from_(BUCKET).get_public_url(storage_path)
-    logger.info(f"Uploaded {storage_path} → {public_url}")
-    return public_url
+    public_url = client.storage.from_(bucket).get_public_url(storage_path)
+    logger.info(f"Uploaded {bucket}/{storage_path} → {public_url}")
+    return (storage_path, public_url) if return_path else public_url
 
 
 def _safe_filename(name: str) -> str:
