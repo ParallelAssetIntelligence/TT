@@ -548,7 +548,7 @@
           "message": {
             "type": "string",
             "description": "Human-readable summary the agent should show the user verbatim",
-            "example": "File uploaded successfully — 234 leads detected in leads_week22.xlsx. Reply 'enrich it' to start enrichment.",
+            "example": "File uploaded — 234 leads detected in leads_week22.xlsx. Enrichment is running automatically in the background. You can lookup any lead right now; full briefs will be ready in 1-2 minutes.",
             "x-ms-summary": "Summary message",
             "x-ms-visibility": "important"
           }

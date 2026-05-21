@@ -153,9 +153,13 @@ def _stage_xlsx_bytes(file_bytes: bytes, filename: str) -> dict:
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # Enrichment kicks off automatically via the storage webhook, so we don't
+    # ask Matt to do anything. Lookup works immediately; briefs get richer as
+    # SerpAPI + the LLM finish in the background (typically 1-2 min).
     message = (
-        f"File uploaded successfully — {rows_detected} leads detected "
-        f"in {filename}. Reply 'enrich it' to start enrichment."
+        f"File uploaded — {rows_detected} leads detected in {filename}. "
+        f"Enrichment is running automatically in the background. "
+        f"You can lookup any lead right now; full briefs will be ready in 1-2 minutes."
     )
 
     return {
