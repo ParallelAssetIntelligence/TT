@@ -96,26 +96,20 @@
         }
       }
     },
-    "/copilot/enrich-file": {
+    "/copilot/enrich-from-url": {
       "post": {
-        "summary": "Enrich uploaded Excel file",
-        "description": "ALWAYS use this tool when Matt UPLOADS, DROPS, or ATTACHES an Excel/xlsx file in the chat, OR says 'enrich this', 'process this file', 'enrich my leads', 'run enrichment'. Pass the file as multipart/form-data (the file itself, NOT a URL). The tool enriches every row with LinkedIn data + personalized openers using Tustin's 6 cold-call scripts, uploads the result to cloud storage, and returns a public download URL. May take 1-2 min for 5 rows, 5-15 min for 700-row files — that is expected.",
-        "operationId": "EnrichFile",
+        "summary": "Enrich Excel file from URL",
+        "description": "Enrich an Excel lead file already uploaded to cloud storage. Pass a public/authenticated URL pointing to the .xlsx file (e.g. a Supabase Storage public URL produced by the Power Automate upload flow). Tool downloads the file, enriches every row with LinkedIn data + personalized openers using Tustin's 6 cold-call scripts, uploads the enriched result to Supabase Storage, and returns a public download URL. Expect 1-2 min for 5 rows, 5-15 min for 700+ rows. This action is normally called by a Power Automate flow, not by the LLM directly — the flow runs after Matt uploads a file in the Copilot Studio Topic.",
+        "operationId": "EnrichFromUrl",
         "tags": ["CoPilot"],
+        "x-ms-summary": "Enrich Excel from URL",
+        "x-ms-visibility": "important",
         "requestBody": {
           "required": true,
           "content": {
-            "multipart/form-data": {
+            "application/json": {
               "schema": {
-                "type": "object",
-                "required": ["file"],
-                "properties": {
-                  "file": {
-                    "type": "string",
-                    "format": "binary",
-                    "description": "The Excel file (.xlsx) Matt uploaded"
-                  }
-                }
+                "$ref": "#/components/schemas/EnrichFromUrlRequest"
               }
             }
           }
@@ -132,7 +126,7 @@
             }
           },
           "400": {
-            "description": "Bad file or parse error",
+            "description": "Bad URL, download error, or parse error",
             "content": {
               "application/json": {
                 "schema": {
@@ -432,6 +426,24 @@
           }
         }
       },
+      "EnrichFromUrlRequest": {
+        "type": "object",
+        "required": ["file_url"],
+        "properties": {
+          "file_url": {
+            "type": "string",
+            "description": "Public or authenticated URL of the .xlsx file to enrich. Normally a Supabase Storage public URL produced by the Power Automate upload step.",
+            "example": "https://wzhqsmaunimgvowkdegl.supabase.co/storage/v1/object/public/uploaded-leads/20260521_162648_test_leads.xlsx",
+            "x-ms-summary": "File URL"
+          },
+          "filename": {
+            "type": "string",
+            "description": "Original filename Matt uploaded; used in the enriched-file storage key.",
+            "example": "test_leads.xlsx",
+            "x-ms-summary": "Original filename"
+          }
+        }
+      },
       "EnrichFileResponse": {
         "type": "object",
         "required": ["status", "download_url", "message"],
@@ -439,37 +451,45 @@
           "status": {
             "type": "string",
             "description": "Always 'success' on a 200 response",
-            "example": "success"
+            "example": "success",
+            "x-ms-summary": "Status"
           },
           "rows_processed": {
             "type": "integer",
             "description": "Number of leads enriched",
-            "example": 700
+            "example": 700,
+            "x-ms-summary": "Rows enriched"
           },
           "decision_makers": {
             "type": "integer",
             "description": "Count of leads tagged as DECISION_MAKER",
-            "example": 142
+            "example": 142,
+            "x-ms-summary": "Decision makers"
           },
           "new_hires": {
             "type": "integer",
             "description": "Count of leads tagged as NEW_HIRE (<12 months tenure)",
-            "example": 89
+            "example": 89,
+            "x-ms-summary": "New hires"
           },
           "long_tenured": {
             "type": "integer",
             "description": "Count of leads tagged as LONG_TENURED (60+ months tenure)",
-            "example": 56
+            "example": 56,
+            "x-ms-summary": "Long-tenured"
           },
           "download_url": {
             "type": "string",
-            "description": "Public URL where Matt can download the enriched file",
-            "example": "https://wzhqsmaunimgvowkdegl.supabase.co/storage/v1/object/public/enriched-files/20260517_103022_leads_week22.xlsx"
+            "description": "Public URL where Matt can download the enriched file. Show this to Matt as a clickable link.",
+            "example": "https://wzhqsmaunimgvowkdegl.supabase.co/storage/v1/object/public/enriched-files/20260517_103022_leads_week22.xlsx",
+            "x-ms-summary": "Download link",
+            "x-ms-visibility": "important"
           },
           "message": {
             "type": "string",
             "description": "Human-readable summary the bot should show Matt",
-            "example": "Enriched 700 leads (142 decision-makers, 89 new hires). Download: https://..."
+            "example": "Enriched 700 leads (142 decision-makers, 89 new hires). Download: https://...",
+            "x-ms-summary": "Summary message"
           }
         }
       },
