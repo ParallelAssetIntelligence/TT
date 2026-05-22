@@ -145,7 +145,7 @@ class RetryFailedRequest(BaseModel):
     limit: int = Field(default=100, ge=1, le=1000)
     max_attempts: int = Field(default=5, ge=1, le=20)
     idle_minutes_for_stuck: int = Field(
-        default=3,
+        default=2,
         ge=1,
         le=120,
         description=(

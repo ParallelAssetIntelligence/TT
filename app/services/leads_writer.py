@@ -538,7 +538,7 @@ def _notify_batch_complete(lead_ids: list[int], succeeded: int, failed: int) -> 
 def fetch_failed_lead_ids(
     limit: int = 100,
     max_attempts: int = 5,
-    idle_minutes_for_stuck: int = 3,
+    idle_minutes_for_stuck: int = 2,
 ) -> list[int]:
     """Return ids of leads that need (re-)enrichment.
 
