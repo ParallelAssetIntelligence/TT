@@ -16,7 +16,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.databaseconnection import supabase_manager
@@ -535,8 +535,21 @@ def _notify_batch_complete(lead_ids: list[int], succeeded: int, failed: int) -> 
         logger.exception("Teams notification failed (continuing anyway)")
 
 
-def fetch_failed_lead_ids(limit: int = 100, max_attempts: int = 5) -> list[int]:
-    """Return ids of leads that failed enrichment and haven't been retried too often.
+def fetch_failed_lead_ids(
+    limit: int = 100,
+    max_attempts: int = 5,
+    stuck_pending_after_minutes: int = 30,
+) -> list[int]:
+    """Return ids of leads that need (re-)enrichment.
+
+    Picks up two kinds of rows:
+      1. enrichment_status='failed' with attempts < max_attempts — the
+         original retry case.
+      2. enrichment_status='pending' that were created more than
+         stuck_pending_after_minutes ago — these are 'stuck' rows whose
+         background task never ran or got killed mid-batch (Railway
+         restart, webhook timeout, etc.). Anything genuinely in-flight
+         is younger than the threshold.
 
     The retry endpoint feeds these into enrich_leads_in_background.
     """
@@ -544,7 +557,8 @@ def fetch_failed_lead_ids(limit: int = 100, max_attempts: int = 5) -> list[int]:
     if not client:
         raise RuntimeError("Supabase client unavailable")
 
-    resp = (
+    # 1. Failed rows still under the retry cap.
+    failed_resp = (
         client.table(LEADS_TABLE)
         .select("id")
         .eq("enrichment_status", "failed")
@@ -553,4 +567,27 @@ def fetch_failed_lead_ids(limit: int = 100, max_attempts: int = 5) -> list[int]:
         .limit(limit)
         .execute()
     )
-    return [r["id"] for r in (resp.data or []) if "id" in r]
+    ids: list[int] = [r["id"] for r in (failed_resp.data or []) if "id" in r]
+
+    # 2. Stuck pending rows — created long enough ago that they should
+    #    have been processed by now if the worker was alive.
+    if len(ids) < limit:
+        remaining = limit - len(ids)
+        cutoff = (
+            datetime.now(timezone.utc)
+            - timedelta(minutes=stuck_pending_after_minutes)
+        ).isoformat()
+        pending_resp = (
+            client.table(LEADS_TABLE)
+            .select("id")
+            .eq("enrichment_status", "pending")
+            .lt("created_at", cutoff)
+            .order("id")
+            .limit(remaining)
+            .execute()
+        )
+        ids.extend(
+            r["id"] for r in (pending_resp.data or []) if "id" in r
+        )
+
+    return ids
