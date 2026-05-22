@@ -76,6 +76,9 @@ def row_to_lead_record(row: dict) -> dict:
         "email": row.get("email", "") or "",
         "city": enrichment.get("city", "") or "",
         "state": enrichment.get("state", "") or "",
+        # ── From the uploaded file (when present, used to ground SerpAPI) ─
+        "industry": enrichment.get("industry", "") or "",
+        "department": enrichment.get("department", "") or "",
         # ── SerpAPI-derived enrichment ───────────────────────────────────
         "website": enrichment.get("website", "") or "",
         "location": enrichment.get("location", "") or "",

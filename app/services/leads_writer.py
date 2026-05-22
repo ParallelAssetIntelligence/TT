@@ -49,6 +49,16 @@ EMAIL_COLS = ["email", "email address", "work email"]
 CITY_COLS = ["city"]
 STATE_COLS = ["state", "state/province", "region"]
 
+# Optional "extras" we now harvest from the uploaded file (when present) so
+# SerpAPI gets a better search query and we skip API calls for data the client
+# already gave us.
+LINKEDIN_COLS = [
+    "linkedin", "linkedin url", "linkedin_url", "li", "li_url", "linkedin profile",
+]
+INDUSTRY_COLS = ["industry", "industries", "vertical", "sector"]
+DEPARTMENT_COLS = ["department", "dept", "function", "team"]
+WEBSITE_COLS = ["website", "company website", "url", "domain", "company url"]
+
 # Maps Enriched_* column → key inside the enrichment jsonb blob.
 ENRICHMENT_COL_MAP = {
     "enriched_linkedin": "linkedin_url",
@@ -146,6 +156,22 @@ def xlsx_row_to_lead_insert(row: LeadRow, source_file: str) -> dict[str, Any] | 
     if state:
         enrichment["state"] = state
 
+    # Pre-populate enrichment from optional columns the upload already
+    # contains. These also feed into the SerpAPI search query so we get
+    # better results than searching by name+company alone.
+    industry = _lookup(data_lower, INDUSTRY_COLS)
+    if industry:
+        enrichment["industry"] = industry
+    department = _lookup(data_lower, DEPARTMENT_COLS)
+    if department:
+        enrichment["department"] = department
+    linkedin_from_file = _lookup(data_lower, LINKEDIN_COLS)
+    if linkedin_from_file:
+        enrichment["linkedin_url"] = linkedin_from_file
+    website_from_file = _lookup(data_lower, WEBSITE_COLS)
+    if website_from_file:
+        enrichment["website"] = website_from_file
+
     title_qualifier = ""
     signal_tag = ""
 
@@ -177,11 +203,11 @@ def xlsx_row_to_lead_insert(row: LeadRow, source_file: str) -> dict[str, Any] | 
         k: v for k, v in row.data.items() if k and v != ""
     }
 
-    # If the upload already brought enrichment fields, treat it as 'done' so
-    # the background SerpAPI sweep doesn't waste calls re-enriching it.
-    has_existing_enrichment = bool(
-        enrichment.get("personalized_opener") or enrichment.get("linkedin_url")
-    )
+    # Only skip enrichment if the upload already includes a personalized opener
+    # (i.e. came from a previously-enriched export). A bare LinkedIn URL from
+    # ZoomInfo etc. is useful context but still needs the LLM intelligence
+    # layer to fill in tenure, signal, opener.
+    has_existing_enrichment = bool(enrichment.get("personalized_opener"))
 
     payload: dict[str, Any] = {
         "name": name,
@@ -284,10 +310,16 @@ def _now_iso() -> str:
 
 
 def _row_to_leadrow(row: dict[str, Any]) -> LeadRow:
-    """Wrap a DB row in a LeadRow so the SerpAPI enricher can query it."""
+    """Wrap a DB row in a LeadRow so the SerpAPI enricher can query it.
+
+    Includes optional context columns (industry, department, LinkedIn URL,
+    website) when the upload provided them — this tightens SerpAPI's match
+    on ambiguous names and lets the LLM ground its analysis on the right
+    company. Empty fields are omitted from the search query by
+    LeadRow.search_text().
+    """
     enrichment = row.get("enrichment") or {}
-    headers = ["Name", "Company", "Title", "Phone", "Email", "City", "State"]
-    data = {
+    data: dict[str, str] = {
         "Name": row.get("name") or "",
         "Company": row.get("company") or "",
         "Title": row.get("title") or "",
@@ -296,7 +328,18 @@ def _row_to_leadrow(row: dict[str, Any]) -> LeadRow:
         "City": enrichment.get("city") or "",
         "State": enrichment.get("state") or "",
     }
-    return LeadRow(headers=headers, data=data)
+    # Optional extras — only add if non-empty (search_text already skips
+    # empties, but this keeps the headers list tidy).
+    for label, key in (
+        ("Industry", "industry"),
+        ("Department", "department"),
+        ("LinkedIn", "linkedin_url"),
+        ("Website", "website"),
+    ):
+        value = enrichment.get(key) or ""
+        if value:
+            data[label] = value
+    return LeadRow(headers=list(data.keys()), data=data)
 
 
 def _mark_failed(client, lead_id: int, error: str, attempts: int) -> None:

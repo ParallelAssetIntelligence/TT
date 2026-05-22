@@ -424,9 +424,19 @@
             "description": "AI-generated 2-3 sentence cold-call opener in Matt's voice",
             "example": "Hi Leigh, this is Matt from The Tustin Group..."
           },
+          "industry": {
+            "type": "string",
+            "description": "Industry from the uploaded file (e.g. Healthcare, K-12 Education). Used to focus SerpAPI search.",
+            "example": "Healthcare"
+          },
+          "department": {
+            "type": "string",
+            "description": "Department/function from the uploaded file (e.g. Facilities Management). Used for SerpAPI context.",
+            "example": "Facilities Management"
+          },
           "website": {
             "type": "string",
-            "description": "Company website discovered via SerpAPI",
+            "description": "Company website — pulled from the upload if present, otherwise discovered via SerpAPI",
             "example": "https://westtown.edu"
           },
           "location": {
