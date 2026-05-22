@@ -54,13 +54,98 @@ class SupabaseStorageWebhook(BaseModel):
     record: StorageObjectRecord | None = None
 
 
+def _process_uploaded_file(bucket: str, object_path: str) -> None:
+    """Heavy lifting that used to run inside the webhook handler.
+
+    Moved to a background task so the webhook itself returns in ~50ms,
+    eliminating the 10-second Supabase timeout cliff for big files.
+
+    Resume-on-retry: if Supabase retries this webhook because an earlier
+    attempt timed out, the dedupe_key unique index makes the insert step
+    idempotent (already-inserted rows are skipped). After insert, we
+    also pick up ANY pending rows tagged with this source_file — that
+    way, leftover rows whose enrichment never got scheduled in a prior
+    attempt are caught and enriched this time around.
+    """
+    client = supabase_manager.get_client()
+    if not client:
+        logger.error("storage-uploaded background: Supabase client unavailable")
+        return
+
+    try:
+        file_bytes = client.storage.from_(bucket).download(object_path)
+    except Exception:
+        logger.exception("background: failed to download %s/%s", bucket, object_path)
+        return
+
+    try:
+        parsed_rows = parse_excel(file_bytes)
+    except Exception:
+        logger.exception("background: failed to parse %s", object_path)
+        return
+
+    if not parsed_rows:
+        logger.info("background: %s has no rows; nothing to do", object_path)
+        return
+
+    try:
+        result = insert_leads_skip_duplicates(parsed_rows, source_file=object_path)
+    except Exception:
+        logger.exception("background: leads_writer failed for %s", object_path)
+        return
+
+    freshly_inserted = result.get("inserted_ids") or []
+
+    # Resume: pull every still-pending row for this file (could include
+    # leftovers from a prior webhook attempt whose enrichment never
+    # got scheduled because the handler timed out).
+    leftover_ids: list[int] = []
+    try:
+        leftover_resp = (
+            client.table("leads")
+            .select("id")
+            .eq("source_file", object_path)
+            .eq("enrichment_status", "pending")
+            .execute()
+        )
+        leftover_ids = [
+            r["id"] for r in (leftover_resp.data or []) if "id" in r
+        ]
+    except Exception:
+        logger.exception(
+            "background: leftover-pending lookup failed for %s", object_path
+        )
+
+    all_ids = sorted(set(freshly_inserted) | set(leftover_ids))
+    if not all_ids:
+        logger.info(
+            "background: %s — nothing to enrich (inserted=%d leftover=%d)",
+            object_path, len(freshly_inserted), len(leftover_ids),
+        )
+        return
+
+    logger.info(
+        "background: %s — enriching %d leads (fresh=%d resume=%d)",
+        object_path, len(all_ids), len(freshly_inserted),
+        len(set(leftover_ids) - set(freshly_inserted)),
+    )
+    enrich_leads_in_background(all_ids)
+
+
 @router.post("/storage-uploaded", status_code=status.HTTP_200_OK)
 async def storage_uploaded(
     payload: SupabaseStorageWebhook,
     background_tasks: BackgroundTasks,
     x_webhook_secret: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    """Auto-populate `leads` when a new xlsx hits the uploaded-leads bucket."""
+    """Acknowledge that a new xlsx hit the uploaded-leads bucket.
+
+    All the heavy lifting (download, parse, insert, enrich) runs in a
+    BackgroundTask AFTER the response is sent, so this handler returns
+    in ~50ms regardless of file size. That sidesteps Supabase's hard
+    10-second webhook timeout, which is impossible to satisfy
+    synchronously for >1k row files.
+    """
     expected_secret = os.getenv("WEBHOOK_SECRET")
     if not expected_secret:
         logger.error("WEBHOOK_SECRET env var not set — refusing webhook")
@@ -85,55 +170,9 @@ async def storage_uploaded(
             "reason": f"{object_path} is not an Excel file",
         }
 
-    client = supabase_manager.get_client()
-    if not client:
-        raise HTTPException(status_code=500, detail="Supabase client unavailable")
+    background_tasks.add_task(_process_uploaded_file, UPLOADED_BUCKET, object_path)
 
-    try:
-        file_bytes = client.storage.from_(UPLOADED_BUCKET).download(object_path)
-    except Exception as e:
-        logger.exception("Failed to download %s/%s", UPLOADED_BUCKET, object_path)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Could not download {object_path}: {e}",
-        )
-
-    try:
-        parsed_rows = parse_excel(file_bytes)
-    except Exception as e:
-        logger.exception("Failed to parse %s", object_path)
-        raise HTTPException(
-            status_code=400,
-            detail=f"Could not parse {object_path}: {e}",
-        )
-
-    if not parsed_rows:
-        return {
-            "status": "ok", "file": object_path,
-            "inserted": 0, "skipped": 0, "invalid": 0, "total": 0,
-        }
-
-    try:
-        result = insert_leads_skip_duplicates(parsed_rows, source_file=object_path)
-    except Exception as e:
-        logger.exception("leads_writer failed for %s", object_path)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to insert leads from {object_path}: {e}",
-        )
-
-    # Fire enrichment after the response is sent so the webhook returns fast.
-    # SerpAPI + the LLM run ~2-4s per lead, well over Supabase's 10s timeout.
-    inserted_ids = result.pop("inserted_ids", [])
-    if inserted_ids:
-        background_tasks.add_task(enrich_leads_in_background, inserted_ids)
-
-    return {
-        "status": "ok",
-        "file": object_path,
-        "enrichment_queued": len(inserted_ids),
-        **result,
-    }
+    return {"status": "accepted", "file": object_path}
 
 
 # ---------------------------------------------------------------------------
