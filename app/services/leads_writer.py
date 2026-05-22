@@ -538,20 +538,23 @@ def _notify_batch_complete(lead_ids: list[int], succeeded: int, failed: int) -> 
 def fetch_failed_lead_ids(
     limit: int = 100,
     max_attempts: int = 5,
-    stuck_pending_after_minutes: int = 30,
+    idle_minutes_for_stuck: int = 3,
 ) -> list[int]:
     """Return ids of leads that need (re-)enrichment.
 
     Picks up two kinds of rows:
-      1. enrichment_status='failed' with attempts < max_attempts — the
-         original retry case.
-      2. enrichment_status='pending' that were created more than
-         stuck_pending_after_minutes ago — these are 'stuck' rows whose
-         background task never ran or got killed mid-batch (Railway
-         restart, webhook timeout, etc.). Anything genuinely in-flight
-         is younger than the threshold.
+      1. enrichment_status='failed' with attempts < max_attempts — same as
+         before: retry rows the enricher explicitly marked failed.
+      2. enrichment_status='pending', but ONLY when the system as a whole
+         has been idle for >= idle_minutes_for_stuck. During a healthy
+         batch the worker is finishing enrichments every few seconds, so
+         MAX(enriched_at) keeps moving forward. The moment that timestamp
+         stops advancing for more than the idle window, the worker is
+         dead and every pending row is stuck.
 
-    The retry endpoint feeds these into enrich_leads_in_background.
+      Fallback for the never-enriched-anything case (system cold-start or
+      legacy data): treat a pending row as stuck if its own created_at
+      is older than the idle window.
     """
     client = supabase_manager.get_client()
     if not client:
@@ -568,23 +571,54 @@ def fetch_failed_lead_ids(
         .execute()
     )
     ids: list[int] = [r["id"] for r in (failed_resp.data or []) if "id" in r]
+    if len(ids) >= limit:
+        return ids
 
-    # 2. Stuck pending rows — created long enough ago that they should
-    #    have been processed by now if the worker was alive.
-    if len(ids) < limit:
+    # 2. Activity check — how long ago was the LAST enrichment system-wide?
+    activity_resp = (
+        client.table(LEADS_TABLE)
+        .select("enriched_at")
+        .not_.is_("enriched_at", "null")
+        .order("enriched_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    last_activity: datetime | None = None
+    if activity_resp.data and activity_resp.data[0].get("enriched_at"):
+        try:
+            last_activity = datetime.fromisoformat(
+                activity_resp.data[0]["enriched_at"].replace("Z", "+00:00")
+            )
+        except ValueError:
+            last_activity = None
+
+    idle_cutoff = datetime.now(timezone.utc) - timedelta(
+        minutes=idle_minutes_for_stuck
+    )
+
+    # System is "idle" if either (a) we have never enriched anything OR
+    # (b) the most recent enrichment is older than the idle window.
+    system_idle = last_activity is None or last_activity < idle_cutoff
+
+    if system_idle:
         remaining = limit - len(ids)
-        cutoff = (
-            datetime.now(timezone.utc)
-            - timedelta(minutes=stuck_pending_after_minutes)
-        ).isoformat()
-        pending_resp = (
+        pending_query = (
             client.table(LEADS_TABLE)
             .select("id")
             .eq("enrichment_status", "pending")
-            .lt("created_at", cutoff)
-            .order("id")
-            .limit(remaining)
-            .execute()
+        )
+        # In the cold-start case (no enrichment ever) we still want to
+        # avoid grabbing rows inserted seconds ago that a live worker
+        # might be processing. Bound by the row's own age.
+        if last_activity is None:
+            cold_cutoff = (
+                datetime.now(timezone.utc)
+                - timedelta(minutes=idle_minutes_for_stuck)
+            ).isoformat()
+            pending_query = pending_query.lt("created_at", cold_cutoff)
+
+        pending_resp = (
+            pending_query.order("id").limit(remaining).execute()
         )
         ids.extend(
             r["id"] for r in (pending_resp.data or []) if "id" in r

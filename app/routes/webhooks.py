@@ -144,6 +144,17 @@ async def storage_uploaded(
 class RetryFailedRequest(BaseModel):
     limit: int = Field(default=100, ge=1, le=1000)
     max_attempts: int = Field(default=5, ge=1, le=20)
+    idle_minutes_for_stuck: int = Field(
+        default=3,
+        ge=1,
+        le=120,
+        description=(
+            "How many minutes of system-wide enrichment inactivity before "
+            "pending rows are considered stuck. During a healthy batch, "
+            "MAX(enriched_at) advances every few seconds — once it stops "
+            "for this long, the worker is dead and pending rows are rescued."
+        ),
+    )
 
 
 @router.post("/retry-failed-enrichments", status_code=status.HTTP_200_OK)
@@ -152,11 +163,12 @@ async def retry_failed_enrichments(
     background_tasks: BackgroundTasks,
     x_webhook_secret: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    """Re-run enrichment for leads where enrichment_status='failed'.
+    """Re-run enrichment for failed rows + stuck-pending rows.
 
-    Skips rows that already hit max_attempts so a permanently bad row doesn't
-    burn API credits forever. Returns the number of leads queued so callers
-    can paginate by re-invoking until queued=0.
+    A row counts as "stuck pending" when the system as a whole hasn't
+    finished an enrichment in `idle_minutes_for_stuck` minutes — i.e. the
+    worker has clearly stopped working. Returns the number of leads
+    queued so callers can paginate by re-invoking until queued=0.
     """
     expected_secret = os.getenv("WEBHOOK_SECRET")
     if not expected_secret:
@@ -166,7 +178,9 @@ async def retry_failed_enrichments(
 
     try:
         lead_ids = fetch_failed_lead_ids(
-            limit=payload.limit, max_attempts=payload.max_attempts,
+            limit=payload.limit,
+            max_attempts=payload.max_attempts,
+            idle_minutes_for_stuck=payload.idle_minutes_for_stuck,
         )
     except Exception as e:
         logger.exception("retry: failed to fetch failed lead ids")
