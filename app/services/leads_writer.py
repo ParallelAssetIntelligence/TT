@@ -149,14 +149,12 @@ def xlsx_row_to_lead_insert(row: LeadRow, source_file: str) -> dict[str, Any] | 
     title_qualifier = ""
     signal_tag = ""
 
-    extras: dict[str, str] = {}
-    consumed = (
-        set(NAME_COLS) | set(FIRST_NAME_COLS) | set(LAST_NAME_COLS)
-        | set(COMPANY_COLS) | set(TITLE_COLS) | set(PHONE_COLS)
-        | set(EMAIL_COLS) | set(CITY_COLS) | set(STATE_COLS)
-    )
+    # Pull Enriched_* columns into the enrichment jsonb and promote the
+    # qualifier/tag to their top-level slots. The full original row is
+    # preserved verbatim in raw_excel_row below, so we no longer need an
+    # `extras` catch-all.
     for k, v in data_lower.items():
-        if not v or k in consumed:
+        if not v:
             continue
         if k in ENRICHMENT_COL_MAP:
             target = ENRICHMENT_COL_MAP[k]
@@ -172,11 +170,12 @@ def xlsx_row_to_lead_insert(row: LeadRow, source_file: str) -> dict[str, Any] | 
                 title_qualifier = v
             else:
                 signal_tag = v
-        else:
-            extras[k] = v
 
-    if extras:
-        enrichment["extras"] = extras
+    # Verbatim copy of the spreadsheet row (header → cell value). Lets
+    # /leads/download regenerate an xlsx that mirrors the original file.
+    raw_excel_row = {
+        k: v for k, v in row.data.items() if k and v != ""
+    }
 
     # If the upload already brought enrichment fields, treat it as 'done' so
     # the background SerpAPI sweep doesn't waste calls re-enriching it.
@@ -193,6 +192,7 @@ def xlsx_row_to_lead_insert(row: LeadRow, source_file: str) -> dict[str, Any] | 
         "signal_tag": signal_tag or None,
         "title_qualifier": title_qualifier or None,
         "enrichment": enrichment,
+        "raw_excel_row": raw_excel_row,
         "source_file": source_file,
         "enrichment_status": "done" if has_existing_enrichment else "pending",
     }

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS public.leads (
     signal_tag          TEXT,          -- NEW_HIRE, LONG_TENURED, CAREER_MOVER, ...
     title_qualifier     TEXT,          -- DECISION_MAKER, INFLUENCER, IN_HOUSE, UNKNOWN
     enrichment          JSONB NOT NULL DEFAULT '{}',
+    raw_excel_row       JSONB NOT NULL DEFAULT '{}',   -- verbatim copy of the Excel row keyed by header
     source_file         TEXT,          -- which uploaded file this row came from
     -- Enrichment tracking (lets the retry sweep find failed/stuck rows)
     enrichment_status   TEXT NOT NULL DEFAULT 'pending'
