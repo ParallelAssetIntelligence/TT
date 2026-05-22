@@ -2,11 +2,12 @@
 
 End-to-end setup for the Tustin CoPilot agent at <https://copilotstudio.microsoft.com>.
 
-Three things to configure:
+Two things to configure:
 
 1. **Agent instructions** — paste-in text that tells the LLM how to route messages and format output.
-2. **Custom connector / Tools** — import `copilot_openapi.json` so the agent can call `brief`, `lookup`, and `respond`.
-3. **"Upload Leads" Topic + Power Automate flow** — handles file uploads (Matt drops an `.xlsx` in chat → bucket → success message). The LLM stays out of this path.
+2. **Custom connector / Tools** — import `copilot_openapi.json` so the agent can call `brief`, `lookup`, `respond`, and `upload-from-url`.
+
+> **Upload flow has changed.** Matt now pastes a public xlsx URL (Google Sheets, Drive, Dropbox, SharePoint, OneDrive, or any direct HTTPS link) in chat. The LLM calls `UploadLeadsFromUrl`, the file is downloaded server-side into the `uploaded-leads` bucket, and the storage webhook auto-inserts + enriches the rows. No Power Automate flow, no file-attachment Topic, no in-chat base64 dance. The legacy `/copilot/upload-file` endpoint is no longer registered as a tool.
 
 ---
 
@@ -34,7 +35,8 @@ ROUTING RULES:
 - If user mentions a person's NAME and asks for info → brief tool
 - If user types what someone SAID → respond tool
 - If user explicitly says "lookup" or "find" → lookup tool
-- If user UPLOADS / ATTACHES a file, or says "enrich this", "upload leads", "process this file", "run enrichment" → DO NOT call any tool. The "Upload Leads" Topic handles this automatically. Stay silent and let the Topic trigger.
+- If user pastes / shares a URL pointing to an .xlsx, .xls, or Google Sheet (Google Drive, Google Sheets, Dropbox, OneDrive, SharePoint, or any direct HTTPS link), OR says "enrich this URL", "upload leads from this link", "process this file" with a URL → call upload-from-url tool. Show the response fields (status, filename, columns_detected, rows_detected, storage_url) verbatim — do NOT add commentary.
+- If user attaches a file (no URL) → tell them: "Please share a public link to the file instead. I can fetch from Google Sheets/Drive, Dropbox, OneDrive, or SharePoint links."
 - If ambiguous → ask a clarifying question
 ```
 
@@ -46,13 +48,14 @@ Import `context/copilot_openapi.json` so the LLM has access to the right actions
 
 ### Which actions the LLM should see
 
-| Action      | OperationId         | When the LLM calls it                         |
-|-------------|---------------------|-----------------------------------------------|
-| brief       | `GetPreCallBrief`   | "tell me about X", "prep me for X", bare name |
-| lookup      | `LookupLeadByName`  | "find X", "lookup X"                          |
-| respond     | `GetLiveSuggestion` | `<prospect just said …>`                      |
+| Action            | OperationId           | When the LLM calls it                                                          |
+|-------------------|-----------------------|--------------------------------------------------------------------------------|
+| brief             | `GetPreCallBrief`     | "tell me about X", "prep me for X", bare name                                  |
+| lookup            | `LookupLeadByName`    | "find X", "lookup X"                                                           |
+| respond           | `GetLiveSuggestion`   | `<prospect just said …>`                                                       |
+| upload-from-url   | `UploadLeadsFromUrl`  | User pastes a Google Sheets / Drive / Dropbox / OneDrive / SharePoint URL      |
 
-> **Why upload-file is NOT in this spec:** Copilot Studio converts uploaded OpenAPI 3.0 specs to Swagger 2.0 internally, and the conversion fails on `multipart/form-data` + `format: binary` schemas with `JSON does not match any schemas from 'anyOf'`. Since the upload endpoint is meant to be called by the Power Automate flow (not the LLM), it doesn't need a connector registration at all — the flow's plain HTTP action calls the Railway URL directly. See section 3a.
+> **Why `/copilot/upload-file` is no longer in this spec:** Matt switched to a URL-paste flow (`upload-from-url`), so the legacy base64 upload tool is unused. The Python endpoint still exists for backward compatibility but is intentionally not advertised to the LLM. The storage webhook (`/webhooks/storage-uploaded`) handles the rest of the pipeline automatically — parse, insert, enrich, notify Teams.
 
 ### Import steps
 
@@ -61,87 +64,72 @@ Import `context/copilot_openapi.json` so the LLM has access to the right actions
 3. Upload `context/copilot_openapi.json`. Name it `Tustin CoPilot API`.
 4. **Security:** No authentication (the endpoints are public; gate at the network layer if needed later).
 5. **Create connector** → switch to **Test** → exercise each action with the sample payloads from the spec.
-6. Back in Copilot Studio → **Tools** → **+ Add a tool** → pick `Tustin CoPilot API` → enable **brief**, **lookup**, **respond**.
+6. Back in Copilot Studio → **Tools** → **+ Add a tool** → pick `Tustin CoPilot API` → enable **brief**, **lookup**, **respond**, **upload-from-url**.
 
 ---
 
-## 3️⃣ "Upload Leads" Topic + Power Automate flow
+## 3️⃣ Upload flow (URL-based, fully LLM-driven)
 
-This is the path for Matt dropping an `.xlsx` in chat. **Build the flow first**, then the Topic that calls it.
+There is **no Topic and no Power Automate flow** for uploads anymore. The LLM detects when the user pastes an xlsx / Google Sheet URL and calls `upload-from-url` directly.
 
-### 3a. Power Automate flow — `Upload Leads File`
+```
+Matt:    https://docs.google.com/spreadsheets/d/1aB.../edit
+  ↓
+LLM detects URL → calls UploadLeadsFromUrl with { url: "..." }
+  ↓
+Backend downloads + parses + stages file in `uploaded-leads` bucket
+  ↓
+Returns: { status: "✅ success", filename, columns_detected, rows_detected, storage_url }
+  ↓
+Storage webhook fires → leads inserted → background SerpAPI/LLM enrichment
+  ↓
+Teams card posted to the "Lead Enrichment" channel when enrichment finishes
+```
 
-1. <https://make.powerautomate.com> → **+ Create** → **Instant cloud flow**.
-2. Name: `Upload Leads File`. Trigger: **When Copilot Studio calls a flow**.
-3. In the trigger → **+ Add an input** → type **File** → name it `LeadsFile`.
-4. **+ New step** → **HTTP** (built-in premium connector).
-   - **Method:** `POST`
-   - **URI:** `https://tt-production-da10.up.railway.app/copilot/upload-file`
-   - **Body** → expand **Show advanced options** → set **Body Type** to **multipart/form-data**.
-   - Add a form-data part:
-     - **Name:** `file`
-     - **Body:** dynamic content → `LeadsFile.contentBytes`
-     - **Filename:** dynamic content → `LeadsFile.name`
-     - **Content type:** `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
-5. **+ New step** → **Parse JSON**.
-   - **Content:** `Body` (from the HTTP step)
-   - **Schema:** use *Generate from sample* and paste a real success response, e.g.:
-     ```json
-     {
-       "status": "success",
-       "filename": "test_leads.xlsx",
-       "storage_path": "20260521_104530_test_leads.xlsx",
-       "storage_url": "https://wzhqsmaunimgvowkdegl.supabase.co/storage/v1/object/public/uploaded-leads/20260521_104530_test_leads.xlsx",
-       "rows_detected": 5,
-       "columns_detected": 12,
-       "message": "File uploaded successfully — 5 leads detected in test_leads.xlsx. Reply 'enrich it' to start enrichment."
-     }
-     ```
-6. **+ New step** → **Respond to Copilot Studio**. Add outputs:
-   - `message` (String) → dynamic content → `message` from Parse JSON
-   - `status` (String) → `status`
-   - `rows_detected` (Number) → `rows_detected`
-7. **Save**.
+### What the LLM shows back to Matt
 
-### 3b. Copilot Studio Topic — `Upload Leads`
+After the connector returns, the agent displays the response fields verbatim:
 
-1. Open the agent → **Topics** → **+ Add a topic** → **From blank**.
-2. Name: `Upload Leads`.
-3. **Trigger phrases** (one per line):
-   - `enrich this file`
-   - `upload leads`
-   - `process this file`
-   - `enrich my leads`
-   - `run enrichment`
-4. **+ Add node** → **Ask a question**:
-   - Question: `Sure — drop your .xlsx lead file here and I'll stage it.`
-   - **Identify:** *File* (under "User's entire response")
-   - Save user response as: `LeadsFile`
-5. **+ Add node** → **Call an action** → **Add a flow** → pick `Upload Leads File`.
-   - Map input `LeadsFile` → `Topic.LeadsFile`.
-6. **+ Add node** → **Condition**:
-   - `Topic.UploadLeadsFile.status` *equals* `success`
-   - **Yes branch:** **Send a message** → dynamic content → `Topic.UploadLeadsFile.message`
-   - **No (or "All other conditions") branch:** **Send a message** → `Something went wrong uploading the file. Please try again, or check the file is a valid .xlsx under 25 MB.`
-7. **Save** → click **Publish** (top right of the agent). The Topic does not fire until you publish.
+```
+Status: ✅ success
+Filename: test_leads.xlsx
+Columns detected: 15
+Rows detected: 5
+Storage URL: https://wzhqsmaunimgvowkdegl.supabase.co/storage/v1/object/public/uploaded-leads/20260521_220636_test_leads.xlsx
+```
+
+A separate Teams card lands ~30-60 seconds later with the **"Download enriched .xlsx"** button. Matt clicks it to grab the filtered, fully-enriched spreadsheet from `/leads/download?source_file=...`.
+
+### Sharing requirements (tell Matt this)
+
+For the URL to actually download the file, the share permission must be:
+
+| Source | Required setting |
+|---|---|
+| Google Sheets / Drive | "Anyone with the link – Viewer" |
+| Dropbox | Default public share works |
+| SharePoint / OneDrive Business | "Anyone with the link" (not "People in your organization") |
+| Direct HTTPS xlsx URL | The URL just needs to return the file (no login redirect) |
 
 ---
 
 ## 4️⃣ End-to-end test
 
-In Teams (after publishing the agent):
+In the Copilot Studio test pane (or Teams) after publishing the agent:
 
 | Test | Steps | Expected |
 |------|-------|----------|
-| Happy path | Type `enrich this file` → drag in `tests/test_leads.xlsx` | Bot replies within ~5 sec: `File uploaded successfully — 5 leads detected in test_leads.xlsx…` Supabase `uploaded-leads` bucket gets a new object. |
-| Wrong file type | Type `upload leads` → drop a `.pdf` | Bot replies with the error fallback message. Power Automate run shows `400 Only .xlsx or .xls files are accepted`. |
-| Empty file | Drop a fresh empty `.xlsx` | Bot replies with the error fallback. Backend log shows `Excel file is empty`. |
-| Brief still works | Type `brief me on Leigh Guarino` | LLM calls the `brief` tool and renders the structured response. No Topic fires. |
-| LLM stays out of upload | Type `process this file` *without* attaching anything | Topic asks for the file (does not try to call any tool itself). |
+| Happy path (URL paste) | Paste a Google Sheets share link | Bot calls `upload-from-url` → returns `✅ success`, filename, rows_detected. Supabase `uploaded-leads` bucket gets a new object. Teams card lands ~30-60s later. |
+| Restricted share | Paste a Sheets URL set to "Restricted" | Bot returns a 400 — the URL must be public. |
+| Non-Excel URL | Paste a link to a PDF or random page | Bot returns a 400 — only .xlsx/.xls or Google Sheets are accepted. |
+| Lookup works | Type `look up Vinnie Corsi` | LLM calls the `lookup` tool, renders all 30 fields including `enrichment_status`. |
+| Brief works | Type `brief me on Harsh Soni` | LLM calls the `brief` tool and renders the structured brief. |
+| File attachment (no URL) | Drag-drop an xlsx without a URL | Bot tells Matt to share a public link instead. |
 
 ### Where to debug if something is off
 
-- **Flow run history** (`make.powerautomate.com` → My flows → `Upload Leads File` → Run history): shows the exact body sent to Railway and the response received. This is the single best debugging surface.
-- **Railway deploy logs**: confirm the request hit the backend; look for `Parsed N rows` and `Uploaded uploaded-leads/...`.
-- **Supabase Storage** dashboard: confirm the file landed in the `uploaded-leads` bucket.
-- **Copilot Studio Topic test pane** (left panel of the Topic editor): step through the Topic with a fake file to verify the Condition branches.
+- **Railway deploy logs**: confirm the `upload-from-url` request hit the backend; look for "Parsed N rows" and "Uploaded uploaded-leads/...".
+- **Supabase Storage** dashboard → `uploaded-leads` bucket: confirm the file landed.
+- **Supabase Database Webhooks** → `leads_storage_uploaded` → Recent deliveries: confirm the webhook fired and got 200 from `/webhooks/storage-uploaded`.
+- **`leads` table** filtered by `source_file = '<filename>'`: confirm rows inserted and `enrichment_status` transitioning `pending → done`.
+- **Teams channel "Lead Enrichment"**: should receive a card when the batch finishes.
