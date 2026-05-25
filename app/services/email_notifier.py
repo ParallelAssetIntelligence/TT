@@ -100,15 +100,13 @@ def send_upload_skipped(filename: str, total_rows: int, skipped: int) -> bool:
     if not TO_EMAILS:
         return False
 
-    subject = f"ℹ️ Upload skipped — {filename} ({skipped} duplicates)"
+    subject = f"✅ Enrichment done — {filename} ({total_rows} leads)"
     html = f"""\
 <!DOCTYPE html>
 <html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;
                    max-width:560px;margin:0 auto;padding:24px;color:#222">
-  <h2 style="color:#e67e22;margin:0 0 8px">📂 Upload processed — all duplicates</h2>
-  <p style="font-size:15px;margin:0 0 16px">
-    <b>ℹ️ {filename}</b> was uploaded but all {skipped} leads already exist in the database.
-  </p>
+  <h2 style="color:#0078d4;margin:0 0 8px">📊 Lead enrichment complete</h2>
+  <p style="font-size:15px;margin:0 0 16px"><b>✅ Your enriched leads are ready, Matt.</b></p>
   <table style="border-collapse:collapse;font-size:14px">
     <tr><td style="padding:6px 16px 6px 0;color:#666"><b>File:</b></td>
         <td style="padding:6px 0">{filename}</td></tr>
@@ -119,16 +117,17 @@ def send_upload_skipped(filename: str, total_rows: int, skipped: int) -> bool:
   </table>
   <p style="color:#666;font-size:13px;margin-top:24px;
             border-top:1px solid #eee;padding-top:16px">
-    No new enrichment was triggered. If you expected new leads,
-    check that the file contains names/companies not already in the system.
+    📌 All {skipped} leads in this file were already enriched, so we skipped them.
+    You can still ask the bot to <b>brief</b> or <b>lookup</b> any of these leads.
   </p>
 </body></html>"""
     text = (
-        f"Upload processed — all duplicates.\n\n"
+        f"Lead enrichment complete.\n\n"
         f"File: {filename}\n"
         f"Total rows: {total_rows}\n"
         f"Skipped (duplicates): {skipped}\n\n"
-        f"No new enrichment was triggered."
+        f"All {skipped} leads in this file were already enriched, so we skipped them.\n"
+        f"You can still ask the bot to brief or lookup any of these leads."
     )
 
     url = f"{AGENTMAIL_BASE_URL}/inboxes/{AGENTMAIL_INBOX}/messages/send"
