@@ -59,6 +59,72 @@ def send_enrichment_complete(
         return False
 
 
+def send_upload_skipped(filename: str, total_rows: int, skipped: int) -> bool:
+    """Post a Teams card when all uploaded rows were duplicates."""
+    if not TEAMS_WEBHOOK_URL:
+        logger.warning("TEAMS_WEBHOOK_URL not set — skipping Teams notification")
+        return False
+
+    card = {
+        "type": "message",
+        "attachments": [
+            {
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": "📂 Upload processed — all duplicates",
+                            "weight": "Bolder",
+                            "size": "Large",
+                            "color": "Warning",
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": f"**{filename}** was uploaded but all {skipped} leads already exist in the database.",
+                            "wrap": True,
+                            "spacing": "Small",
+                        },
+                        {
+                            "type": "FactSet",
+                            "facts": [
+                                {"title": "File:", "value": filename},
+                                {"title": "Total rows:", "value": str(total_rows)},
+                                {"title": "Skipped (duplicates):", "value": str(skipped)},
+                            ],
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "No new enrichment was triggered. If you expected new leads, check that the file contains names/companies not already in the system.",
+                            "wrap": True,
+                            "spacing": "Medium",
+                            "isSubtle": True,
+                        },
+                    ],
+                },
+            }
+        ],
+    }
+
+    try:
+        with httpx.Client(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
+            r = client.post(TEAMS_WEBHOOK_URL, json=card)
+        if r.status_code >= 400:
+            logger.error(
+                "Teams webhook failed (skipped): HTTP %s — %s",
+                r.status_code, r.text[:200],
+            )
+            return False
+        logger.info("Teams skipped-upload notification sent for %s", filename)
+        return True
+    except httpx.HTTPError as e:
+        logger.error("Teams webhook transport error (skipped): %s", e)
+        return False
+
+
 def _build_card(
     filename: str,
     rows_processed: int,

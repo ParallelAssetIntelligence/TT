@@ -93,6 +93,72 @@ def send_enrichment_complete(
         return False
 
 
+def send_upload_skipped(filename: str, total_rows: int, skipped: int) -> bool:
+    """Email notification when all uploaded rows were duplicates."""
+    if not AGENTMAIL_API_KEY or not AGENTMAIL_INBOX:
+        return False
+    if not TO_EMAILS:
+        return False
+
+    subject = f"ℹ️ Upload skipped — {filename} ({skipped} duplicates)"
+    html = f"""\
+<!DOCTYPE html>
+<html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;
+                   max-width:560px;margin:0 auto;padding:24px;color:#222">
+  <h2 style="color:#e67e22;margin:0 0 8px">📂 Upload processed — all duplicates</h2>
+  <p style="font-size:15px;margin:0 0 16px">
+    <b>ℹ️ {filename}</b> was uploaded but all {skipped} leads already exist in the database.
+  </p>
+  <table style="border-collapse:collapse;font-size:14px">
+    <tr><td style="padding:6px 16px 6px 0;color:#666"><b>File:</b></td>
+        <td style="padding:6px 0">{filename}</td></tr>
+    <tr><td style="padding:6px 16px 6px 0;color:#666"><b>Total rows:</b></td>
+        <td style="padding:6px 0">{total_rows}</td></tr>
+    <tr><td style="padding:6px 16px 6px 0;color:#666"><b>Skipped (duplicates):</b></td>
+        <td style="padding:6px 0">{skipped}</td></tr>
+  </table>
+  <p style="color:#666;font-size:13px;margin-top:24px;
+            border-top:1px solid #eee;padding-top:16px">
+    No new enrichment was triggered. If you expected new leads,
+    check that the file contains names/companies not already in the system.
+  </p>
+</body></html>"""
+    text = (
+        f"Upload processed — all duplicates.\n\n"
+        f"File: {filename}\n"
+        f"Total rows: {total_rows}\n"
+        f"Skipped (duplicates): {skipped}\n\n"
+        f"No new enrichment was triggered."
+    )
+
+    url = f"{AGENTMAIL_BASE_URL}/inboxes/{AGENTMAIL_INBOX}/messages/send"
+    payload = {
+        "to": TO_EMAILS,
+        "subject": subject,
+        "html": html,
+        "text": text,
+    }
+    headers = {
+        "Authorization": f"Bearer {AGENTMAIL_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        with httpx.Client(timeout=SEND_TIMEOUT_SECONDS) as client:
+            r = client.post(url, headers=headers, json=payload)
+        if r.status_code >= 400:
+            logger.error(
+                "AgentMail send failed (skipped): HTTP %s — %s",
+                r.status_code, r.text[:300],
+            )
+            return False
+        logger.info("Skipped-upload email sent for %s to %s", filename, TO_EMAILS)
+        return True
+    except httpx.HTTPError as e:
+        logger.error("AgentMail transport error (skipped): %s", e)
+        return False
+
+
 def _build_html(
     filename: str,
     rows_processed: int,

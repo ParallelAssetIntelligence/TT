@@ -122,6 +122,10 @@ def _process_uploaded_file(bucket: str, object_path: str) -> None:
             "background: %s — nothing to enrich (inserted=%d leftover=%d)",
             object_path, len(freshly_inserted), len(leftover_ids),
         )
+        skipped = result.get("skipped", 0)
+        total = result.get("total", len(parsed_rows))
+        if skipped > 0:
+            _notify_all_skipped(object_path, total, skipped)
         return
 
     logger.info(
@@ -130,6 +134,18 @@ def _process_uploaded_file(bucket: str, object_path: str) -> None:
         len(set(leftover_ids) - set(freshly_inserted)),
     )
     enrich_leads_in_background(all_ids)
+
+
+def _notify_all_skipped(filename: str, total_rows: int, skipped: int) -> None:
+    """Fire Teams + email when every row in an upload was a duplicate."""
+    try:
+        from app.services.teams_notifier import send_upload_skipped as teams_skipped
+        from app.services.email_notifier import send_upload_skipped as email_skipped
+
+        teams_skipped(filename, total_rows, skipped)
+        email_skipped(filename, total_rows, skipped)
+    except Exception:
+        logger.exception("Skipped-upload notification failed (continuing anyway)")
 
 
 @router.post("/storage-uploaded", status_code=status.HTTP_200_OK)
