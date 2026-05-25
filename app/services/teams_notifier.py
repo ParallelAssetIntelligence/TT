@@ -59,52 +59,78 @@ def send_enrichment_complete(
         return False
 
 
-def send_upload_skipped(filename: str, total_rows: int, skipped: int) -> bool:
+def send_upload_skipped(
+    filename: str, total_rows: int, skipped: int, file_url: str | None = None,
+) -> bool:
     """Post a Teams card when all uploaded rows were duplicates."""
     if not TEAMS_WEBHOOK_URL:
         logger.warning("TEAMS_WEBHOOK_URL not set — skipping Teams notification")
         return False
+
+    body: list[dict] = [
+        {
+            "type": "TextBlock",
+            "text": "📊 Lead enrichment complete",
+            "weight": "Bolder",
+            "size": "Large",
+            "color": "Accent",
+        },
+        {
+            "type": "TextBlock",
+            "text": "✅ Your enriched leads are ready!",
+            "wrap": True,
+            "spacing": "Small",
+            "weight": "Bolder",
+        },
+        {
+            "type": "FactSet",
+            "facts": [
+                {"title": "File:", "value": filename},
+                {"title": "Total rows:", "value": str(total_rows)},
+                {"title": "Skipped (duplicates):", "value": str(skipped)},
+            ],
+        },
+    ]
+    if file_url:
+        body.append({
+            "type": "TextBlock",
+            "text": "📂 Download enriched leads:",
+            "wrap": True,
+            "spacing": "Medium",
+            "weight": "Bolder",
+        })
+        body.append({
+            "type": "TextBlock",
+            "text": file_url,
+            "wrap": True,
+            "isSubtle": True,
+            "spacing": "None",
+        })
+    body.append({
+        "type": "TextBlock",
+        "text": f"📌 All {skipped} leads in this file were already enriched, so we skipped them. You can still ask the bot to **brief** or **lookup** any of these leads.",
+        "wrap": True,
+        "spacing": "Medium",
+        "isSubtle": True,
+    })
+
+    card_content: dict = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": body,
+    }
+    if file_url:
+        card_content["actions"] = [
+            {"type": "Action.OpenUrl", "title": "Download enriched .xlsx", "url": file_url}
+        ]
 
     card = {
         "type": "message",
         "attachments": [
             {
                 "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": {
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "type": "AdaptiveCard",
-                    "version": "1.4",
-                    "body": [
-                        {
-                            "type": "TextBlock",
-                            "text": "📂 Upload processed — all duplicates",
-                            "weight": "Bolder",
-                            "size": "Large",
-                            "color": "Warning",
-                        },
-                        {
-                            "type": "TextBlock",
-                            "text": f"**{filename}** was uploaded but all {skipped} leads already exist in the database.",
-                            "wrap": True,
-                            "spacing": "Small",
-                        },
-                        {
-                            "type": "FactSet",
-                            "facts": [
-                                {"title": "File:", "value": filename},
-                                {"title": "Total rows:", "value": str(total_rows)},
-                                {"title": "Skipped (duplicates):", "value": str(skipped)},
-                            ],
-                        },
-                        {
-                            "type": "TextBlock",
-                            "text": "No new enrichment was triggered. If you expected new leads, check that the file contains names/companies not already in the system.",
-                            "wrap": True,
-                            "spacing": "Medium",
-                            "isSubtle": True,
-                        },
-                    ],
-                },
+                "content": card_content,
             }
         ],
     }

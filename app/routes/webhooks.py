@@ -139,11 +139,15 @@ def _process_uploaded_file(bucket: str, object_path: str) -> None:
 def _notify_all_skipped(filename: str, total_rows: int, skipped: int) -> None:
     """Fire Teams + email when every row in an upload was a duplicate."""
     try:
-        from app.services.teams_notifier import send_upload_skipped as teams_skipped
+        from app.services.teams_notifier import (
+            build_download_url,
+            send_upload_skipped as teams_skipped,
+        )
         from app.services.email_notifier import send_upload_skipped as email_skipped
 
-        teams_skipped(filename, total_rows, skipped)
-        email_skipped(filename, total_rows, skipped)
+        download_url = build_download_url(filename)
+        teams_skipped(filename, total_rows, skipped, file_url=download_url)
+        email_skipped(filename, total_rows, skipped, file_url=download_url)
     except Exception:
         logger.exception("Skipped-upload notification failed (continuing anyway)")
 

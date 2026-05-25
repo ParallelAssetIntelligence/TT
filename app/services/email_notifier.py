@@ -93,7 +93,9 @@ def send_enrichment_complete(
         return False
 
 
-def send_upload_skipped(filename: str, total_rows: int, skipped: int) -> bool:
+def send_upload_skipped(
+    filename: str, total_rows: int, skipped: int, file_url: str | None = None,
+) -> bool:
     """Email notification when all uploaded rows were duplicates."""
     if not AGENTMAIL_API_KEY or not AGENTMAIL_INBOX:
         return False
@@ -101,6 +103,18 @@ def send_upload_skipped(filename: str, total_rows: int, skipped: int) -> bool:
         return False
 
     subject = f"✅ Enrichment done — {filename} ({total_rows} leads)"
+
+    download_btn = ""
+    if file_url:
+        download_btn = (
+            f'<p style="margin:24px 0">'
+            f'<a href="{file_url}" '
+            f'style="background:#0078d4;color:#fff;padding:12px 24px;'
+            f'border-radius:6px;text-decoration:none;display:inline-block;'
+            f'font-weight:600">📂 Download enriched .xlsx</a>'
+            f'</p>'
+        )
+
     html = f"""\
 <!DOCTYPE html>
 <html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;
@@ -115,17 +129,20 @@ def send_upload_skipped(filename: str, total_rows: int, skipped: int) -> bool:
     <tr><td style="padding:6px 16px 6px 0;color:#666"><b>Skipped (duplicates):</b></td>
         <td style="padding:6px 0">{skipped}</td></tr>
   </table>
+  {download_btn}
   <p style="color:#666;font-size:13px;margin-top:24px;
             border-top:1px solid #eee;padding-top:16px">
     📌 All {skipped} leads in this file were already enriched, so we skipped them.
     You can still ask the bot to <b>brief</b> or <b>lookup</b> any of these leads.
   </p>
 </body></html>"""
+    download_text = f"\nDownload: {file_url}" if file_url else ""
     text = (
         f"Lead enrichment complete.\n\n"
         f"File: {filename}\n"
         f"Total rows: {total_rows}\n"
-        f"Skipped (duplicates): {skipped}\n\n"
+        f"Skipped (duplicates): {skipped}\n"
+        f"{download_text}\n\n"
         f"All {skipped} leads in this file were already enriched, so we skipped them.\n"
         f"You can still ask the bot to brief or lookup any of these leads."
     )
