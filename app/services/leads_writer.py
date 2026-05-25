@@ -297,6 +297,7 @@ def insert_leads_skip_duplicates(
         "invalid": invalid,
         "total": len(parsed_rows),
         "inserted_ids": inserted_ids,
+        "dedupe_keys": list(deduped.keys()),
     }
 
 

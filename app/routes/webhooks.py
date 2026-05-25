@@ -125,7 +125,24 @@ def _process_uploaded_file(bucket: str, object_path: str) -> None:
         skipped = result.get("skipped", 0)
         total = result.get("total", len(parsed_rows))
         if skipped > 0:
-            _notify_all_skipped(object_path, total, skipped)
+            # Look up the original source_file from existing DB rows so the
+            # download URL points to the right file (not the new timestamped name).
+            original_source = object_path
+            dedupe_keys = result.get("dedupe_keys") or []
+            if dedupe_keys and client:
+                try:
+                    resp = (
+                        client.table("leads")
+                        .select("source_file")
+                        .in_("dedupe_key", dedupe_keys[:10])
+                        .limit(1)
+                        .execute()
+                    )
+                    if resp.data and resp.data[0].get("source_file"):
+                        original_source = resp.data[0]["source_file"]
+                except Exception:
+                    logger.exception("background: failed to look up original source_file")
+            _notify_all_skipped(original_source, total, skipped)
         return
 
     logger.info(
