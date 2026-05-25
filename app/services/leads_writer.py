@@ -487,11 +487,14 @@ def enrich_leads_in_background(lead_ids: list[int]) -> None:
 
 
 def _notify_batch_complete(lead_ids: list[int], succeeded: int, failed: int) -> None:
-    """Send one Teams card summarizing the batch. Best-effort: never raises."""
+    """Fire Teams card + email summarizing the batch. Best-effort: never raises."""
     try:
         from app.services.teams_notifier import (
             build_download_url,
-            send_enrichment_complete,
+            send_enrichment_complete as send_teams_notification,
+        )
+        from app.services.email_notifier import (
+            send_enrichment_complete as send_email_notification,
         )
 
         client = supabase_manager.get_client()
@@ -521,18 +524,27 @@ def _notify_batch_complete(lead_ids: list[int], succeeded: int, failed: int) -> 
             1 for r in rows
             if (r.get("enrichment") or {}).get("tenure_label") == "LONG_TENURED"
         )
+        download_url = build_download_url(source_file)
 
-        send_enrichment_complete(
+        send_teams_notification(
             filename=source_file,
             rows_processed=succeeded,
             rows_failed=failed,
             new_hires=new_hires,
             long_tenured=long_tenured,
-            file_url=build_download_url(source_file),
+            file_url=download_url,
+        )
+        send_email_notification(
+            filename=source_file,
+            rows_processed=succeeded,
+            rows_failed=failed,
+            new_hires=new_hires,
+            long_tenured=long_tenured,
+            file_url=download_url,
         )
     except Exception:
-        # Notifications are advisory — never let a Teams hiccup break the pipeline.
-        logger.exception("Teams notification failed (continuing anyway)")
+        # Notifications are advisory — never let a hiccup break the pipeline.
+        logger.exception("Batch notification failed (continuing anyway)")
 
 
 def fetch_failed_lead_ids(
