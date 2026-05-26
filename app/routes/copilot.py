@@ -82,14 +82,16 @@ class UploadFromUrlRequest(BaseModel):
 
 @router.post("/lookup")
 async def lookup_lead(payload: LookupRequest):
-    """Find a lead by name; returns the enriched LeadRecord or 404."""
+    """Find a lead by name; returns the enriched LeadRecord or a not-found message."""
     row = find_lead_by_name(payload.lead_name)
     if not row:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No lead found matching '{payload.lead_name}'",
-        )
-    return row_to_lead_record(row)
+        return {
+            "found": False,
+            "detail": f"No lead found matching '{payload.lead_name}'",
+        }
+    result = row_to_lead_record(row)
+    result["found"] = True
+    return result
 
 
 @router.post("/brief")
@@ -97,12 +99,14 @@ async def get_brief(payload: BriefRequest):
     """Return a structured pre-call brief for the lead."""
     row = find_lead_by_name(payload.lead_name)
     if not row:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No lead found matching '{payload.lead_name}'",
-        )
+        return {
+            "found": False,
+            "detail": f"No lead found matching '{payload.lead_name}'",
+        }
     lead = row_to_lead_record(row)
-    return generate_brief(lead)
+    result = generate_brief(lead)
+    result["found"] = True
+    return result
 
 
 @router.post("/respond")

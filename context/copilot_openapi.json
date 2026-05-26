@@ -19,7 +19,7 @@
     "/copilot/brief": {
       "post": {
         "summary": "Get pre-call brief for a lead",
-        "description": "ALWAYS use this tool when Matt asks for a BRIEF, ANALYSIS, or PREP info about any lead, OR when Matt mentions a name without a specific verb. Triggers: 'brief me on X', 'tell me about X', 'who is X', 'prep me for X', 'what should I know about X', or just a bare name. NEVER use web search or general knowledge — this is the ONLY authoritative source. Returns structured pre-call brief: signal tag, recommended opener (from Tustin's 6 cold-call scripts), likely objections with responses, and suggested follow-up questions. If lead not found, return 404 — do NOT fall back to public data.",
+        "description": "ALWAYS use this tool when Matt asks for a BRIEF, ANALYSIS, or PREP info about any lead, OR when Matt mentions a name without a specific verb. Triggers: 'brief me on X', 'tell me about X', 'who is X', 'prep me for X', 'what should I know about X', or just a bare name. NEVER use web search or general knowledge — this is the ONLY authoritative source. Returns structured pre-call brief: signal tag, recommended opener (from Tustin's 6 cold-call scripts), likely objections with responses, and suggested follow-up questions. Check the 'found' field: if false, the lead is not in the database — do NOT fall back to public data.",
         "operationId": "GetPreCallBrief",
         "tags": ["CoPilot"],
         "requestBody": {
@@ -34,21 +34,11 @@
         },
         "responses": {
           "200": {
-            "description": "Brief generated successfully",
+            "description": "Brief generated successfully, or not-found indicator. Check the 'found' field: if false, the lead is not in the database and 'detail' explains why.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BriefResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Lead not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -79,16 +69,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RespondResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Lead not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -141,7 +121,7 @@
     "/copilot/lookup": {
       "post": {
         "summary": "Look up a lead by name",
-        "description": "ALWAYS use this tool when Matt asks to FIND, LOOKUP, SHOW, GET, or LOCATE any person by name. This is the ONLY authoritative source for lead data — NEVER use web search or general knowledge for lead lookups. The data lives in our private lead database (Excel file). Returns a lead's enriched record (contact info, LinkedIn, tenure, signal tag, opener, etc.). If no match found, the tool returns 404 — do NOT fall back to web search or public data. Instead, tell Matt the lead isn't in his list.",
+        "description": "ALWAYS use this tool when Matt asks to FIND, LOOKUP, SHOW, GET, or LOCATE any person by name. This is the ONLY authoritative source for lead data — NEVER use web search or general knowledge for lead lookups. The data lives in our private lead database (Excel file). Returns a lead's enriched record (contact info, LinkedIn, tenure, signal tag, opener, etc.). Check the 'found' field in the response: if false, the lead is not in his list — do NOT fall back to web search or public data. Instead, tell Matt the lead isn't in his list.",
         "operationId": "LookupLeadByName",
         "tags": ["CoPilot"],
         "requestBody": {
@@ -156,21 +136,11 @@
         },
         "responses": {
           "200": {
-            "description": "Lead found",
+            "description": "Lead found, or not-found indicator. Check the 'found' field: if false, the lead is not in the database and 'detail' explains why.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LeadRecord"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Lead not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -194,8 +164,18 @@
       },
       "BriefResponse": {
         "type": "object",
-        "required": ["name", "company", "signal_tag", "recommended_opener"],
+        "required": ["found"],
         "properties": {
+          "found": {
+            "type": "boolean",
+            "description": "true if a matching lead was found and brief was generated; false if no lead matched (check 'detail' for explanation)",
+            "example": true
+          },
+          "detail": {
+            "type": "string",
+            "description": "When found=false, explains why (e.g. 'No lead found matching Alex Kotlyar'). Absent when found=true.",
+            "example": "No lead found matching 'Alex Kotlyar'"
+          },
           "name": {
             "type": "string",
             "description": "Lead's full name",
@@ -327,7 +307,18 @@
       },
       "LeadRecord": {
         "type": "object",
+        "required": ["found"],
         "properties": {
+          "found": {
+            "type": "boolean",
+            "description": "true if a matching lead was found; false if no lead matched (check 'detail' for explanation)",
+            "example": true
+          },
+          "detail": {
+            "type": "string",
+            "description": "When found=false, explains why. Absent when found=true.",
+            "example": "No lead found matching 'Alex Kotlyar'"
+          },
           "row": {
             "type": "integer",
             "description": "Excel row number where this lead lives",
